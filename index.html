@@ -306,6 +306,14 @@
         <input type="range" id="cooldownSlider" min="2" max="10" value="4">
       </div>
       <div class="row">
+        <label><span id="lblQuality"></span></label>
+        <select id="qualitySelect" style="width:100%; background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:12px; font-size:14px; font-family:'Space Grotesk',sans-serif;">
+          <option value="standard" id="optQualityStandard"></option>
+          <option value="high" id="optQualityHigh"></option>
+          <option value="ultra" id="optQualityUltra"></option>
+        </select>
+      </div>
+      <div class="row">
         <label><span id="lblShutterType"></span></label>
         <select id="shutterTypeSelect" style="width:100%; background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:12px; font-size:14px; font-family:'Space Grotesk',sans-serif;">
           <option value="film" id="optFilm"></option>
@@ -406,6 +414,10 @@
       shutterFilm: 'Film camera',
       shutterDigital: 'Digital camera',
       shutterMute: 'Mute',
+      qualityLabel: 'Photo quality',
+      qualityStandard: 'Standard (smaller files)',
+      qualityHigh: 'High (recommended)',
+      qualityUltra: 'Ultra (largest files)',
       shutterVolLabel: 'Shutter volume',
       languageLabel: 'Language',
       galleryTitle: 'Workout Log',
@@ -446,6 +458,10 @@
       shutterFilm: '필름 카메라',
       shutterDigital: '디지털 카메라',
       shutterMute: '무음',
+      qualityLabel: '사진 화질',
+      qualityStandard: '표준 (용량 작음)',
+      qualityHigh: '고화질 (권장)',
+      qualityUltra: '최고화질 (용량 큼)',
       shutterVolLabel: '셔터음 크기',
       languageLabel: '언어',
       galleryTitle: '운동 기록',
@@ -480,6 +496,12 @@
   let cooldownMs = 4000;
   let shutterType = 'film';  // 'film' | 'digital' | 'mute'
   let shutterVolume = 0.85;  // 0..1
+  let qualityPreset = 'high'; // 'standard' | 'high' | 'ultra'
+  const QUALITY_PRESETS = {
+    standard: { w:1080, h:1440, jpeg:0.85 },
+    high:     { w:1920, h:2560, jpeg:0.94 },
+    ultra:    { w:2880, h:3840, jpeg:0.97 },
+  };
   let lastFrame = null;
   let stillSince = null;
   let cooldownUntil = 0;
@@ -597,8 +619,9 @@
   async function startCamera(){
     try{
       if(stream){ stream.getTracks().forEach(t=>t.stop()); }
+      const q = QUALITY_PRESETS[qualityPreset] || QUALITY_PRESETS.high;
       stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode, width:{ideal:1920}, height:{ideal:2560} },
+        video:{ facingMode, width:{ideal:q.w}, height:{ideal:q.h} },
         audio:false
       });
       video.srcObject = stream;
@@ -818,7 +841,7 @@
     }
     cctx.drawImage(video,0,0,vw,vh);
     drawTimestamp(cctx, vw, vh, ts);
-    const dataUrl = capture.toDataURL('image/jpeg', 0.94);
+    const dataUrl = capture.toDataURL('image/jpeg', (QUALITY_PRESETS[qualityPreset] || QUALITY_PRESETS.high).jpeg);
 
     flashEl.style.opacity = '1';
     setTimeout(()=> flashEl.style.opacity='0', 90);
@@ -869,11 +892,24 @@
     const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`;
     const filename = `STILL_${stamp}.jpg`;
 
-    // Path 1: Web Share API with a real File. Most WebView-based APK
-    // wrappers (Median, WebIntoApp, Appilix, etc.) implement this even
-    // though they don't implement <a download>, because it delegates to
-    // Android's native share sheet instead of the browser's own download
-    // manager. This is the reliable path inside an APK.
+    // Path 1: plain <a download>. Now that the app runs as a real PWA/TWA
+    // (actual Chrome engine, not a bare Appilix WebView), this saves the
+    // file directly to the device's Downloads folder immediately — no
+    // share-sheet prompt, no extra tap.
+    try{
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      return;
+    }catch(e){
+      console.warn('direct download failed, falling back to share sheet', e);
+    }
+
+    // Path 2: Web Share API — only used as a fallback if the direct
+    // download somehow isn't available (e.g. an unusual embedded browser).
     try{
       const res = await fetch(dataUrl);
       const blob = await res.blob();
@@ -885,20 +921,7 @@
     }catch(e){
       // user cancelling the share sheet also lands here (AbortError) — not a real failure
       if(e && e.name === 'AbortError') return;
-      console.warn('share save failed, falling back', e);
-    }
-
-    // Path 2: classic <a download> — works in a normal mobile browser tab,
-    // just not inside most bare WebView APK shells.
-    try{
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-    }catch(e){
-      console.error('device save failed', e);
+      console.error('device save failed completely', e);
       alert(t('saveFailedAlert'));
     }
   }
@@ -1100,6 +1123,13 @@
     if(shutterType !== 'mute') playShutterSound(); // quick preview at new volume
   };
 
+  const qualitySelect = document.getElementById('qualitySelect');
+  qualitySelect.value = qualityPreset;
+  qualitySelect.onchange = ()=>{
+    qualityPreset = qualitySelect.value;
+    if(cameraActive) startCamera(); // re-request the stream at the new resolution
+  };
+
   const langBtnEn = document.getElementById('langBtnEn');
   const langBtnKo = document.getElementById('langBtnKo');
   function setLanguage(newLang){
@@ -1130,6 +1160,10 @@
     document.getElementById('optFilm').textContent = t('shutterFilm');
     document.getElementById('optDigital').textContent = t('shutterDigital');
     document.getElementById('optMute').textContent = t('shutterMute');
+    document.getElementById('lblQuality').textContent = t('qualityLabel');
+    document.getElementById('optQualityStandard').textContent = t('qualityStandard');
+    document.getElementById('optQualityHigh').textContent = t('qualityHigh');
+    document.getElementById('optQualityUltra').textContent = t('qualityUltra');
     document.getElementById('lblShutterVol').textContent = t('shutterVolLabel');
     document.getElementById('lblLanguage').textContent = t('languageLabel');
 
