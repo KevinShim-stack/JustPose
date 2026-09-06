@@ -1,7 +1,14 @@
-// Minimal service worker: caches the app shell so it opens instantly and
-// works offline after the first load. Since this app has no backend, this
-// is all it needs — no network requests to proxy besides the shell files.
-const CACHE_NAME = 'just-pose-v1';
+// Service worker for Just Pose.
+//
+// Strategy:
+//  - HTML (the app page itself): network-first. Always tries to fetch the
+//    latest version first, and only falls back to the cached copy if the
+//    device is offline. This means updates to index.html show up the very
+//    next time the app is opened with a connection — no manual cache-busting
+//    needed.
+//  - Everything else (manifest, icons): cache-first, since those rarely
+//    change and cache-first keeps the app opening instantly.
+const CACHE_NAME = 'just-pose-v2';
 const SHELL_FILES = [
   './',
   './index.html',
@@ -28,7 +35,23 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  const isHTML = req.mode === 'navigate' || req.headers.get('accept')?.includes('text/html');
+
+  if (isHTML) {
+    event.respondWith(
+      fetch(req)
+        .then((res) => {
+          const copy = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(req, copy));
+          return res;
+        })
+        .catch(() => caches.match(req))
+    );
+    return;
+  }
+
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    caches.match(req).then((cached) => cached || fetch(req))
   );
 });
