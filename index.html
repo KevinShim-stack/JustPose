@@ -1037,6 +1037,7 @@
     viewerImg.src = val;
     viewerDate.textContent = fmtDate(p.ts);
     viewer.style.display='flex';
+    history.pushState({modal:'viewer'}, '');
   }
 
   document.getElementById('saveDevicePhoto').onclick = ()=>{
@@ -1048,29 +1049,50 @@
     await storeDelete(currentViewing.key);
     index = index.filter(x=>x.key!==currentViewing.key);
     await saveIndex();
-    viewer.style.display='none';
-    renderStreak(); renderStrip(); openGallery();
+    history.back(); // closes the viewer (consumes the state pushed by openViewer)
+    renderStreak(); renderStrip();
+    if(gallerySheet.style.display === 'flex') openGallery();
   };
-  document.getElementById('closeViewer').onclick = ()=>{
-    viewer.style.display='none';
-    lastFrame = null; stillSince = null;
+  document.getElementById('closeViewer').onclick = ()=> history.back();
+  document.getElementById('galleryBtn').onclick = ()=>{
+    history.pushState({modal:'gallery'}, '');
+    openGallery();
   };
-  document.getElementById('galleryBtn').onclick = openGallery;
-  document.getElementById('closeGallery').onclick = ()=>{
-    gallerySheet.style.display='none';
-    selectMode = false;
-    selectedKeys.clear();
-    selectModeBtn.textContent = '선택';
-    lastFrame = null; stillSince = null;
-  };
+  document.getElementById('closeGallery').onclick = ()=> history.back();
 
   // ---------- Settings ----------
   const settingsSheet = document.getElementById('settingsSheet');
-  document.getElementById('settingsBtn').onclick = ()=> settingsSheet.style.display='flex';
-  document.getElementById('closeSettings').onclick = ()=>{
-    settingsSheet.style.display='none';
-    lastFrame = null; stillSince = null;
+  document.getElementById('settingsBtn').onclick = ()=>{
+    history.pushState({modal:'settings'}, '');
+    settingsSheet.style.display='flex';
   };
+  document.getElementById('closeSettings').onclick = ()=> history.back();
+
+  // The Android back button (and browser back gesture) fires popstate rather
+  // than closing the app — as long as we've pushed a history entry for
+  // whatever's open. This closes the top-most visible sheet instead of
+  // exiting to the home screen. If nothing is open, we do nothing here and
+  // let the normal back/exit behavior proceed.
+  window.addEventListener('popstate', ()=>{
+    if(viewer.style.display === 'flex'){
+      viewer.style.display = 'none';
+      lastFrame = null; stillSince = null;
+      return;
+    }
+    if(gallerySheet.style.display === 'flex'){
+      gallerySheet.style.display = 'none';
+      selectMode = false;
+      selectedKeys.clear();
+      selectModeBtn.textContent = t('selectBtnOn');
+      lastFrame = null; stillSince = null;
+      return;
+    }
+    if(settingsSheet.style.display === 'flex'){
+      settingsSheet.style.display = 'none';
+      lastFrame = null; stillSince = null;
+      return;
+    }
+  });
 
   const holdSlider = document.getElementById('holdSlider');
   const holdVal = document.getElementById('holdVal');
