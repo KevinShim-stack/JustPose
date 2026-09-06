@@ -621,7 +621,15 @@
       if(stream){ stream.getTracks().forEach(t=>t.stop()); }
       const q = QUALITY_PRESETS[qualityPreset] || QUALITY_PRESETS.high;
       stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode, width:{ideal:q.w}, height:{ideal:q.h} },
+        video:{
+          facingMode, width:{ideal:q.w}, height:{ideal:q.h},
+          // Ask for continuous autofocus/exposure/white-balance up front.
+          // Browsers that don't recognize these simply ignore them, so this
+          // is safe even on devices/browsers without camera-control support.
+          focusMode:{ideal:'continuous'},
+          exposureMode:{ideal:'continuous'},
+          whiteBalanceMode:{ideal:'continuous'}
+        },
         audio:false
       });
       video.srcObject = stream;
@@ -629,6 +637,22 @@
       document.getElementById('permissionSheet').style.display='none';
       lastFrame = null; stillSince = null;
       cameraActive = true;
+
+      // Belt-and-suspenders: explicitly (re)apply continuous autofocus via
+      // the track's own constraints too, since some devices only honor it
+      // this way rather than through the initial getUserMedia request.
+      try{
+        const track = stream.getVideoTracks()[0];
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        const advanced = {};
+        if(caps.focusMode && caps.focusMode.includes('continuous')) advanced.focusMode = 'continuous';
+        if(caps.exposureMode && caps.exposureMode.includes('continuous')) advanced.exposureMode = 'continuous';
+        if(caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) advanced.whiteBalanceMode = 'continuous';
+        if(Object.keys(advanced).length) await track.applyConstraints({advanced:[advanced]});
+      }catch(e){
+        console.warn('could not explicitly set continuous autofocus', e);
+      }
+
       if(!loopHandle) loopHandle = requestAnimationFrame(tick);
     }catch(e){
       cameraActive = false;
