@@ -598,7 +598,7 @@
     try{
       if(stream){ stream.getTracks().forEach(t=>t.stop()); }
       stream = await navigator.mediaDevices.getUserMedia({
-        video:{ facingMode, width:{ideal:1080}, height:{ideal:1440} },
+        video:{ facingMode, width:{ideal:1920}, height:{ideal:2560} },
         audio:false
       });
       video.srcObject = stream;
@@ -810,7 +810,7 @@
     stillSince = null;
 
     const ts = Date.now();
-    const vw = video.videoWidth || 1080, vh = video.videoHeight || 1440;
+    const vw = video.videoWidth || 1920, vh = video.videoHeight || 2560;
     capture.width = vw; capture.height = vh;
     const cctx = capture.getContext('2d');
     if(facingMode==='user'){
@@ -818,7 +818,7 @@
     }
     cctx.drawImage(video,0,0,vw,vh);
     drawTimestamp(cctx, vw, vh, ts);
-    const dataUrl = capture.toDataURL('image/jpeg', 0.85);
+    const dataUrl = capture.toDataURL('image/jpeg', 0.94);
 
     flashEl.style.opacity = '1';
     setTimeout(()=> flashEl.style.opacity='0', 90);
