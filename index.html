@@ -953,7 +953,16 @@
     if(facingMode==='user'){
       cctx.translate(vw,0); cctx.scale(-1,1);
     }
+    // Web camera capture skips the computational-photography pipeline native
+    // camera apps use (multi-frame merge, tuned contrast/sharpening), so the
+    // raw sensor frame looks flatter and softer by comparison. This gives
+    // it a gentle boost in the same direction — a bit more contrast/
+    // saturation while drawing, then an edge-sharpening pass afterward —
+    // to partially close that gap.
+    cctx.filter = 'contrast(1.08) saturate(1.12) brightness(1.02)';
     cctx.drawImage(sourceImg,0,0,vw,vh);
+    cctx.filter = 'none';
+    sharpenCanvas(cctx, vw, vh);
     drawTimestamp(cctx, vw, vh, ts);
     const dataUrl = capture.toDataURL('image/jpeg', q.jpeg);
 
@@ -976,6 +985,38 @@
 
   // Burns the capture timestamp into the bottom of the photo itself,
   // so it travels with the image no matter where it ends up.
+  // Simple single-pass edge-sharpening (Laplacian-based unsharp mask) run
+  // directly on the canvas pixel data. Native camera apps apply sharpening
+  // as part of their image pipeline; this approximates that for a photo
+  // captured through the web camera API, which doesn't get any of that
+  // processing on its own.
+  function sharpenCanvas(cctx, w, h, amount){
+    amount = amount == null ? 0.4 : amount;
+    if(w < 3 || h < 3) return; // too small to matter, avoid edge-case math
+    let imgData;
+    try{
+      imgData = cctx.getImageData(0, 0, w, h);
+    }catch(e){
+      console.warn('sharpenCanvas: could not read pixel data, skipping', e);
+      return;
+    }
+    const src = imgData.data;
+    const out = new Uint8ClampedArray(src); // start as a copy; only interior pixels get rewritten
+    const stride = w * 4;
+
+    for(let y = 1; y < h - 1; y++){
+      let i = (y * w + 1) * 4;
+      for(let x = 1; x < w - 1; x++, i += 4){
+        out[i]   = src[i]   + amount * (4*src[i]   - src[i-stride]   - src[i+stride]   - src[i-4]   - src[i+4]);
+        out[i+1] = src[i+1] + amount * (4*src[i+1] - src[i-stride+1] - src[i+stride+1] - src[i-4+1] - src[i+4+1]);
+        out[i+2] = src[i+2] + amount * (4*src[i+2] - src[i-stride+2] - src[i+stride+2] - src[i-4+2] - src[i+4+2]);
+      }
+    }
+
+    imgData.data.set(out);
+    cctx.putImageData(imgData, 0, 0);
+  }
+
   function drawTimestamp(cctx, vw, vh, ts){
     cctx.setTransform(1,0,0,1,0,0); // undo any mirror transform first
     const d = new Date(ts);
