@@ -912,7 +912,21 @@
       const track = stream && stream.getVideoTracks()[0];
       if(track && 'ImageCapture' in window){
         const imageCapture = new ImageCapture(track);
-        const blob = await imageCapture.takePhoto();
+
+        // The video preview stream is capped at whatever resolution we
+        // requested for smooth playback — the camera's actual still-photo
+        // pipeline is often capable of much more. Ask for its true max.
+        let opts = {};
+        try{
+          const caps = await imageCapture.getPhotoCapabilities();
+          if(caps && caps.imageWidth && caps.imageHeight){
+            opts = { imageWidth: caps.imageWidth.max, imageHeight: caps.imageHeight.max };
+          }
+        }catch(e){
+          console.warn('getPhotoCapabilities unavailable, using default takePhoto size', e);
+        }
+
+        const blob = await imageCapture.takePhoto(opts);
         sourceImg = await createImageBitmap(blob);
         srcW = sourceImg.width; srcH = sourceImg.height;
       }
@@ -952,7 +966,6 @@
     await saveIndex();
     renderStreak();
     renderStrip();
-    showToast(`${t('savedToast')} (${vw}×${vh})`);
     // NOTE: no longer auto-triggering a device download here.
     // Chrome silently blocks downloads that aren't tied to a direct user
     // click, which is exactly what happens on auto-capture (still-pose
