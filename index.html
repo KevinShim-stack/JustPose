@@ -1211,9 +1211,13 @@
     viewerImg.style.transform = 'none';
   }
 
+  function slideWidth(){
+    return document.getElementById('viewerImgWrap').getBoundingClientRect().width || 300;
+  }
+
   function snapTrackInstant(){
     viewerTrack.style.transition = 'none';
-    viewerTrack.style.transform = 'translateX(-33.3333%)';
+    viewerTrack.style.transform = `translateX(${-slideWidth()}px)`;
     void viewerTrack.offsetWidth; // force reflow so a later transition doesn't animate from this reset
   }
 
@@ -1236,6 +1240,7 @@
     viewerDate.textContent = fmtDate(p.ts);
     await preloadNeighbors();
     snapTrackInstant();
+    requestAnimationFrame(snapTrackInstant); // re-assert on the next paint too, belt-and-suspenders against any layout timing race
   }
 
   async function openViewer(p){
@@ -1305,23 +1310,23 @@
         // Rubber-band: dampen the drag near the ends where there's no neighbor to reveal
         if(dragDx < 0 && currentIndex >= index.length-1) dragDx *= 0.35;
         if(dragDx > 0 && currentIndex <= 0) dragDx *= 0.35;
-        viewerTrack.style.transform = `translateX(calc(-33.3333% + ${dragDx}px))`;
+        viewerTrack.style.transform = `translateX(${-slideWidth() + dragDx}px)`;
       }
     });
 
     function finishSwipe(){
-      const wrapWidth = wrap.getBoundingClientRect().width || 300;
-      const threshold = Math.min(90, wrapWidth * 0.22);
+      const w = slideWidth();
+      const threshold = Math.min(90, w * 0.22);
       viewerTrack.style.transition = 'transform .22s ease';
 
       if(dragDx <= -threshold && currentIndex < index.length-1){
-        viewerTrack.style.transform = 'translateX(-66.6666%)'; // reveal the "next" (older) slot
+        viewerTrack.style.transform = `translateX(${-2*w}px)`; // reveal the "next" (older) slot
         setTimeout(()=> showPhotoAt(currentIndex+1), 220);
       } else if(dragDx >= threshold && currentIndex > 0){
-        viewerTrack.style.transform = 'translateX(0%)'; // reveal the "prev" (newer) slot
+        viewerTrack.style.transform = 'translateX(0px)'; // reveal the "prev" (newer) slot
         setTimeout(()=> showPhotoAt(currentIndex-1), 220);
       } else {
-        viewerTrack.style.transform = 'translateX(-33.3333%)'; // snap back to center
+        viewerTrack.style.transform = `translateX(${-w}px)`; // snap back to center
       }
       dragDx = 0;
     }
