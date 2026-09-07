@@ -47,8 +47,8 @@
   }
 
   #toast{
-    position:absolute; left:50%; bottom:180px; z-index:15;
-    transform:translateX(-50%) translateY(8px);
+    position:absolute; left:50%; top:74px; z-index:50;
+    transform:translateX(-50%) translateY(-8px);
     display:flex; align-items:center; gap:8px;
     background:rgba(21,23,27,0.95); border:1px solid var(--line);
     border-radius:999px; padding:10px 18px;
@@ -58,7 +58,6 @@
     white-space:nowrap;
   }
   #toast .dot{ width:7px; height:7px; border-radius:50%; background:var(--accent); flex-shrink:0; }
-  #toast.show{ opacity:1; transform:translateX(-50%) translateY(0); }
 
   #countdownOverlay{
     position:absolute; inset:0; z-index:6; display:none;
@@ -504,14 +503,20 @@
   function t(key){ return translations[lang][key]; }
 
   // Small pill notification (e.g. "Photo saved") that fades in and
-  // auto-dismisses after ~1 second.
+  // auto-dismisses after ~1 second. Uses inline styles directly rather
+  // than a CSS class toggle, so it can't be silently defeated by any
+  // other rule's specificity.
   let toastTimer = null;
   function showToast(msg){
     const toast = document.getElementById('toast');
     document.getElementById('toastText').textContent = msg;
-    toast.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(()=> toast.classList.remove('show'), 1000);
+    toast.style.opacity = '1';
+    toast.style.transform = 'translateX(-50%) translateY(0)';
+    toastTimer = setTimeout(()=>{
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(-50%) translateY(-8px)';
+    }, 1000);
   }
 
   const RING_CIRC = 628;
@@ -937,7 +942,7 @@
     await saveIndex();
     renderStreak();
     renderStrip();
-    showToast(t('savedToast'));
+    showToast(`${t('savedToast')} (${vw}×${vh})`);
     // NOTE: no longer auto-triggering a device download here.
     // Chrome silently blocks downloads that aren't tied to a direct user
     // click, which is exactly what happens on auto-capture (still-pose
