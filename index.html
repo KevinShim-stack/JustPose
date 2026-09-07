@@ -220,13 +220,15 @@
   #viewerImgWrap{
     flex:1; display:flex; align-items:center; justify-content:center;
     padding:12px 28px; overflow:hidden; min-height:0;
-    touch-action:pan-y; /* claim horizontal drags for JS swipe nav, not the browser's edge-back gesture */
+    touch-action:none; /* JS fully handles pinch-zoom/pan/swipe; don't let the browser intercept any of it */
   }
   #viewerImgWrap img{
     max-width:100%; max-height:100%; width:auto; height:auto;
     object-fit:contain; border-radius:16px;
     box-shadow:0 8px 30px rgba(0,0,0,.5);
     transition:opacity .15s ease;
+    -webkit-user-drag:none; user-select:none; -webkit-touch-callout:none;
+    touch-action:none; /* we handle pinch/pan/swipe entirely via JS */
   }
   #viewerBar{
     display:flex; justify-content:space-between; align-items:center;
@@ -383,7 +385,7 @@
     <div id="viewerBar">
       <button class="closebtn" id="closeViewer">✕</button>
     </div>
-    <div id="viewerImgWrap"><img id="viewerImg" src=""></div>
+    <div id="viewerImgWrap"><img id="viewerImg" src="" draggable="false"></div>
     <div id="viewerFoot">
       <div class="date" id="viewerDate"></div>
       <div style="display:flex; gap:8px;">
@@ -1190,6 +1192,12 @@
   };
 
   let currentIndex = -1; // position of currentViewing within the `index` array
+  let zoomScale = 1, panX = 0, panY = 0; // pinch-zoom / pan state for the viewer image
+
+  function resetZoom(){
+    zoomScale = 1; panX = 0; panY = 0;
+    viewerImg.style.transform = 'none';
+  }
 
   async function showPhotoAt(idx){
     if(idx < 0 || idx >= index.length) return; // out of range — no wrap, just ignore
@@ -1198,6 +1206,7 @@
     if(!val) return;
     currentIndex = idx;
     currentViewing = p;
+    resetZoom();
     viewerImg.style.opacity = '0';
     setTimeout(()=>{
       viewerImg.src = val;
@@ -1214,27 +1223,77 @@
     await showPhotoAt(idx);
   }
 
-  // Swipe left/right on the photo to move to the next/previous one in the
-  // gallery (`index` is sorted newest-first, so swiping left moves to an
-  // older photo and swiping right moves to a newer one). Uses Pointer
-  // Events (unifies touch/mouse/pen) rather than raw touch events.
-  (function setupViewerSwipe(){
+  // Photo viewer gestures, all via Pointer Events (unifies touch/mouse/pen):
+  //  - One finger, not zoomed: swipe left/right to move to the next/previous photo.
+  //  - Two fingers: pinch to zoom (1x–4x).
+  //  - One finger, zoomed in: drag to pan around the photo.
+  (function setupViewerGestures(){
     const wrap = document.getElementById('viewerImgWrap');
-    let startX = null, startY = null, tracking = false;
+    const pointers = new Map(); // pointerId -> {x,y}
+    let pinchStartDist = 0, pinchStartScale = 1;
+    let panStart = null;  // {x,y,panX,panY} — active when panning a zoomed photo
+    let swipeStart = null; // {x,y} — active when swiping to navigate (not zoomed)
+
+    function dist(a, b){
+      const dx = a.x-b.x, dy = a.y-b.y;
+      return Math.sqrt(dx*dx + dy*dy);
+    }
+    function applyTransform(){
+      viewerImg.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomScale})`;
+    }
+
     wrap.addEventListener('pointerdown', (e)=>{
-      startX = e.clientX; startY = e.clientY; tracking = true;
-    });
-    wrap.addEventListener('pointerup', (e)=>{
-      if(!tracking) return;
-      tracking = false;
-      const dx = e.clientX - startX;
-      const dy = e.clientY - startY;
-      if(Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.2){
-        if(dx < 0) showPhotoAt(currentIndex + 1);
-        else showPhotoAt(currentIndex - 1);
+      wrap.setPointerCapture(e.pointerId);
+      pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+      if(pointers.size === 2){
+        const pts = [...pointers.values()];
+        pinchStartDist = dist(pts[0], pts[1]);
+        pinchStartScale = zoomScale;
+        panStart = null; swipeStart = null;
+      } else if(pointers.size === 1){
+        if(zoomScale > 1){
+          panStart = {x:e.clientX, y:e.clientY, panX, panY};
+        } else {
+          swipeStart = {x:e.clientX, y:e.clientY};
+        }
       }
     });
-    wrap.addEventListener('pointercancel', ()=>{ tracking = false; });
+
+    wrap.addEventListener('pointermove', (e)=>{
+      if(!pointers.has(e.pointerId)) return;
+      pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+      if(pointers.size === 2 && pinchStartDist > 0){
+        const pts = [...pointers.values()];
+        const d = dist(pts[0], pts[1]);
+        zoomScale = Math.min(4, Math.max(1, pinchStartScale * (d / pinchStartDist)));
+        applyTransform();
+      } else if(pointers.size === 1 && panStart){
+        panX = panStart.panX + (e.clientX - panStart.x);
+        panY = panStart.panY + (e.clientY - panStart.y);
+        applyTransform();
+      }
+    });
+
+    function onPointerEnd(e){
+      if(pointers.size === 1 && swipeStart && zoomScale === 1){
+        const dx = e.clientX - swipeStart.x;
+        const dy = e.clientY - swipeStart.y;
+        if(Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.2){
+          if(dx < 0) showPhotoAt(currentIndex + 1);
+          else showPhotoAt(currentIndex - 1);
+        }
+      }
+      pointers.delete(e.pointerId);
+      if(pointers.size < 2) pinchStartDist = 0;
+      if(pointers.size === 0){
+        swipeStart = null; panStart = null;
+        if(zoomScale <= 1) resetZoom(); // snap fully back to 1x if we ended at/below it
+      }
+    }
+    wrap.addEventListener('pointerup', onPointerEnd);
+    wrap.addEventListener('pointercancel', onPointerEnd);
   })();
 
   document.getElementById('saveDevicePhoto').onclick = ()=>{
