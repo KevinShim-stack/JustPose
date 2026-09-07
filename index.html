@@ -217,7 +217,15 @@
     position:absolute; inset:0; z-index:30; background:#000; display:none;
     flex-direction:column;
   }
-  #viewer img{ flex:1; width:100%; object-fit:contain; }
+  #viewerImgWrap{
+    flex:1; display:flex; align-items:center; justify-content:center;
+    padding:12px 28px; overflow:hidden; min-height:0;
+  }
+  #viewerImgWrap img{
+    max-width:100%; max-height:100%; width:auto; height:auto;
+    object-fit:contain; border-radius:16px;
+    box-shadow:0 8px 30px rgba(0,0,0,.5);
+  }
   #viewerBar{
     display:flex; justify-content:space-between; align-items:center;
     padding:calc(env(safe-area-inset-top,0px) + 14px) 18px 14px;
@@ -373,7 +381,7 @@
     <div id="viewerBar">
       <button class="closebtn" id="closeViewer">✕</button>
     </div>
-    <img id="viewerImg" src="">
+    <div id="viewerImgWrap"><img id="viewerImg" src=""></div>
     <div id="viewerFoot">
       <div class="date" id="viewerDate"></div>
       <div style="display:flex; gap:8px;">
@@ -445,6 +453,7 @@
       saveFailedAlert: 'Save failed. This photo is still safely stored in the app gallery.',
       secShort: 's',
       savedToast: 'Photo saved',
+      savedDeviceToast: 'Saved to device',
     },
     ko: {
       title: 'Just Pose',
@@ -490,6 +499,7 @@
       saveFailedAlert: '저장에 실패했어요. 이 사진은 앱 갤러리에는 안전하게 남아있어요.',
       secShort: '초',
       savedToast: '사진이 저장됐어요',
+      savedDeviceToast: '기기에 저장됐어요',
     }
   };
 
@@ -994,6 +1004,7 @@
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      showToast(t('savedDeviceToast'));
       return;
     }catch(e){
       console.warn('direct download failed, falling back to share sheet', e);
@@ -1007,6 +1018,7 @@
       const file = new File([blob], filename, {type: 'image/jpeg'});
       if(navigator.canShare && navigator.canShare({files:[file]})){
         await navigator.share({files:[file], title: filename});
+        showToast(t('savedDeviceToast'));
         return;
       }
     }catch(e){
