@@ -658,7 +658,8 @@
   async function renderStrip(){
     strip.innerHTML = '';
     const recent = index.slice(0,10);
-    for(const p of recent){
+    for(let i=0; i<recent.length; i++){
+      const p = recent[i];
       const val = await storeGet(p.key);
       if(!val) continue;
       const div = document.createElement('div');
@@ -666,7 +667,7 @@
       const img = document.createElement('img');
       img.src = val;
       div.appendChild(img);
-      div.onclick = ()=> openViewer(p);
+      div.onclick = ()=> openViewer(p, i); // recent[i] === index[i], same position
       strip.appendChild(div);
     }
   }
@@ -1132,7 +1133,8 @@
     gallerySheet.style.display='flex';
     galGrid.innerHTML='';
     galEmpty.style.display = index.length===0 ? 'block':'none';
-    for(const p of index){
+    for(let i=0; i<index.length; i++){
+      const p = index[i];
       const val = await storeGet(p.key);
       if(!val) continue;
       const cell = document.createElement('div');
@@ -1172,7 +1174,7 @@
           cell.classList.toggle('selected');
           updateSelectBar();
         } else {
-          openViewer(p);
+          openViewer(p, i); // pass the exact array position directly — no re-lookup needed
         }
       };
       galGrid.appendChild(cell);
@@ -1243,9 +1245,9 @@
     requestAnimationFrame(snapTrackInstant); // re-assert on the next paint too, belt-and-suspenders against any layout timing race
   }
 
-  async function openViewer(p){
-    const idx = index.findIndex(x => x.key === p.key);
-    if(idx === -1) return;
+  async function openViewer(p, idx){
+    if(idx == null) idx = index.findIndex(x => x.key === p.key);
+    if(idx === -1 || idx == null) return;
     viewer.style.display='flex';
     history.pushState({modal:'viewer'}, '');
     await showPhotoAt(idx);
