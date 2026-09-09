@@ -222,17 +222,12 @@
     padding:12px 28px; overflow:hidden; min-height:0; position:relative;
     touch-action:none; /* JS fully handles pinch-zoom/pan/swipe; don't let the browser intercept any of it */
   }
-  #viewerTrack{
-    display:flex; width:300%; height:100%; flex-shrink:0;
-    transform:translateX(-33.3333%);
-  }
-  #viewerTrack img{
-    flex:0 0 33.3333%; width:33.3333%; height:100%;
+  #viewerImgWrap img{
+    max-width:100%; max-height:100%; width:auto; height:auto;
     object-fit:contain; border-radius:16px;
     box-shadow:0 8px 30px rgba(0,0,0,.5);
     -webkit-user-drag:none; user-select:none; -webkit-touch-callout:none;
   }
-  #viewerImgPrev, #viewerImgNext{ opacity:.85; }
   #viewerBar{
     display:flex; justify-content:space-between; align-items:center;
     padding:calc(env(safe-area-inset-top,0px) + 14px) 18px 14px;
@@ -388,13 +383,7 @@
     <div id="viewerBar">
       <button class="closebtn" id="closeViewer">✕</button>
     </div>
-    <div id="viewerImgWrap">
-      <div id="viewerTrack">
-        <img id="viewerImgPrev" src="" draggable="false">
-        <img id="viewerImg" src="" draggable="false">
-        <img id="viewerImgNext" src="" draggable="false">
-      </div>
-    </div>
+    <div id="viewerImgWrap"><img id="viewerImg" src="" draggable="false"></div>
     <div id="viewerFoot">
       <div class="date" id="viewerDate"></div>
       <div style="display:flex; gap:8px;">
@@ -1109,9 +1098,6 @@
   const galEmpty = document.getElementById('galEmpty');
   const viewer = document.getElementById('viewer');
   const viewerImg = document.getElementById('viewerImg');
-  const viewerImgPrev = document.getElementById('viewerImgPrev');
-  const viewerImgNext = document.getElementById('viewerImgNext');
-  const viewerTrack = document.getElementById('viewerTrack');
   const viewerDate = document.getElementById('viewerDate');
   let currentViewing = null;
   let selectMode = false;
@@ -1213,24 +1199,11 @@
     viewerImg.style.transform = 'none';
   }
 
-  function slideWidth(){
-    return document.getElementById('viewerImgWrap').getBoundingClientRect().width || 300;
-  }
-
-  function snapTrackInstant(){
-    viewerTrack.style.transition = 'none';
-    viewerTrack.style.transform = `translateX(${-slideWidth()}px)`;
-    void viewerTrack.offsetWidth; // force reflow so a later transition doesn't animate from this reset
-  }
-
-  async function preloadNeighbors(){
-    const prevP = index[currentIndex-1]; // newer photo — slides in from the left
-    const nextP = index[currentIndex+1]; // older photo — slides in from the right
-    viewerImgPrev.src = prevP ? (await storeGet(prevP.key)) || '' : '';
-    viewerImgNext.src = nextP ? (await storeGet(nextP.key)) || '' : '';
-  }
-
-  async function showPhotoAt(idx){
+  // Loads a photo into the single viewer <img>. `fromDx` (if given) is the
+  // pixel offset the outgoing photo should slide out toward, so the new one
+  // can slide in from the opposite side — purely a single-element transform/
+  // opacity animation, no neighbor pre-loading or multi-slide track involved.
+  async function showPhotoAt(idx, fromDx){
     if(idx < 0 || idx >= index.length) return; // out of range — no wrap, just ignore
     const p = index[idx];
     const val = await storeGet(p.key);
@@ -1238,11 +1211,30 @@
     currentIndex = idx;
     currentViewing = p;
     resetZoom();
-    viewerImg.src = val;
-    viewerDate.textContent = fmtDate(p.ts);
-    await preloadNeighbors();
-    snapTrackInstant();
-    requestAnimationFrame(snapTrackInstant); // re-assert on the next paint too, belt-and-suspenders against any layout timing race
+
+    if(fromDx){
+      const w = document.getElementById('viewerImgWrap').getBoundingClientRect().width || 300;
+      const dir = fromDx < 0 ? -1 : 1; // which way the OLD photo exited
+      viewerImg.style.transition = 'transform .16s ease, opacity .16s ease';
+      viewerImg.style.transform = `translateX(${dir * w * 0.4}px)`;
+      viewerImg.style.opacity = '0';
+      await new Promise(r => setTimeout(r, 160));
+
+      viewerImg.src = val;
+      viewerDate.textContent = fmtDate(p.ts);
+      viewerImg.style.transition = 'none';
+      viewerImg.style.transform = `translateX(${-dir * w * 0.4}px)`;
+      void viewerImg.offsetWidth; // force reflow before animating in
+      viewerImg.style.transition = 'transform .16s ease, opacity .16s ease';
+      viewerImg.style.transform = 'translateX(0)';
+      viewerImg.style.opacity = '1';
+    } else {
+      viewerImg.src = val;
+      viewerDate.textContent = fmtDate(p.ts);
+      viewerImg.style.transition = 'none';
+      viewerImg.style.transform = 'none';
+      viewerImg.style.opacity = '1';
+    }
   }
 
   async function openViewer(p, idx){
@@ -1254,9 +1246,8 @@
   }
 
   // Photo viewer gestures, all via Pointer Events (unifies touch/mouse/pen):
-  //  - One finger, not zoomed: drag to follow the swipe live (carousel-style);
-  //    release past the threshold to commit to the next/previous photo with
-  //    a slide animation, or it snaps back to center.
+  //  - One finger, not zoomed: swipe past the threshold to move to the next/
+  //    previous photo, which slides/fades in.
   //  - Two fingers: pinch to zoom (1x–4x).
   //  - One finger, zoomed in: drag to pan around the photo.
   (function setupViewerGestures(){
@@ -1265,7 +1256,6 @@
     let pinchStartDist = 0, pinchStartScale = 1;
     let panStart = null;   // {x,y,panX,panY} — active when panning a zoomed photo
     let swipeStart = null; // {x,y} — active when dragging to navigate (not zoomed)
-    let dragDx = 0;
 
     function dist(a, b){
       const dx = a.x-b.x, dy = a.y-b.y;
@@ -1289,7 +1279,6 @@
           panStart = {x:e.clientX, y:e.clientY, panX, panY};
         } else {
           swipeStart = {x:e.clientX, y:e.clientY};
-          viewerTrack.style.transition = 'none';
         }
       }
     });
@@ -1307,35 +1296,17 @@
         panX = panStart.panX + (e.clientX - panStart.x);
         panY = panStart.panY + (e.clientY - panStart.y);
         applyZoomTransform();
-      } else if(pointers.size === 1 && swipeStart){
-        dragDx = e.clientX - swipeStart.x;
-        // Rubber-band: dampen the drag near the ends where there's no neighbor to reveal
-        if(dragDx < 0 && currentIndex >= index.length-1) dragDx *= 0.35;
-        if(dragDx > 0 && currentIndex <= 0) dragDx *= 0.35;
-        viewerTrack.style.transform = `translateX(${-slideWidth() + dragDx}px)`;
       }
     });
 
-    function finishSwipe(){
-      const w = slideWidth();
-      const threshold = Math.min(90, w * 0.22);
-      viewerTrack.style.transition = 'transform .22s ease';
-
-      if(dragDx <= -threshold && currentIndex < index.length-1){
-        viewerTrack.style.transform = `translateX(${-2*w}px)`; // reveal the "next" (older) slot
-        setTimeout(()=> showPhotoAt(currentIndex+1), 220);
-      } else if(dragDx >= threshold && currentIndex > 0){
-        viewerTrack.style.transform = 'translateX(0px)'; // reveal the "prev" (newer) slot
-        setTimeout(()=> showPhotoAt(currentIndex-1), 220);
-      } else {
-        viewerTrack.style.transform = `translateX(${-w}px)`; // snap back to center
-      }
-      dragDx = 0;
-    }
-
     function onPointerEnd(e){
       if(pointers.size === 1 && swipeStart && zoomScale === 1){
-        finishSwipe();
+        const dx = e.clientX - swipeStart.x;
+        const dy = e.clientY - swipeStart.y;
+        if(Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.3){
+          if(dx < 0) showPhotoAt(currentIndex + 1, dx); // swipe left -> next (older)
+          else showPhotoAt(currentIndex - 1, dx);       // swipe right -> prev (newer)
+        }
       }
       pointers.delete(e.pointerId);
       if(pointers.size < 2) pinchStartDist = 0;
