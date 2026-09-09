@@ -442,7 +442,7 @@
       modeLabel: n => `Auto-capture after ${n}s of stillness`,
       settingsTitle: 'Settings',
       holdTimeLabel: 'Hold time',
-      sensLabel: 'Sensitivity (lower = resets with tiny movements)',
+      sensLabel: 'Sensitivity (higher = resets with smaller movements)',
       sensLabels: ['Very low','Low','','','Medium','','','High','Very high'],
       cooldownLabel: 'Cooldown after capture',
       shutterTypeLabel: 'Shutter sound',
@@ -488,7 +488,7 @@
       modeLabel: n => `정지 자세 ${n}초 유지 시 자동 촬영`,
       settingsTitle: '설정',
       holdTimeLabel: '정지 유지 시간',
-      sensLabel: '민감도 (낮을수록 살짝만 움직여도 리셋)',
+      sensLabel: '민감도 (높을수록 작은 움직임에도 리셋)',
       sensLabels: ['매우 둔감','둔감','','','보통','','','민감','매우 민감'],
       cooldownLabel: '촬영 후 대기시간',
       shutterTypeLabel: '셔터음 종류',
@@ -560,6 +560,8 @@
   };
   let lastFrame = null;
   let stillSince = null;
+  let countdownMotionFrames = 0;
+  let countdownActive = false;
   let cooldownUntil = 0;
   let armed = true;
   let loopHandle = null;
@@ -658,8 +660,7 @@
   async function renderStrip(){
     strip.innerHTML = '';
     const recent = index.slice(0,10);
-    for(let i=0; i<recent.length; i++){
-      const p = recent[i];
+    for(const p of recent){
       const val = await storeGet(p.key);
       if(!val) continue;
       const div = document.createElement('div');
@@ -667,7 +668,7 @@
       const img = document.createElement('img');
       img.src = val;
       div.appendChild(img);
-      div.onclick = ()=> openViewer(p, i); // recent[i] === index[i], same position
+      div.onclick = ()=> openViewer(p);
       strip.appendChild(div);
     }
   }
@@ -726,6 +727,8 @@
     if(countdownInterval){ clearInterval(countdownInterval); countdownInterval = null; }
     document.getElementById('countdownOverlay').style.display = 'none';
     capturing = false;
+    countdownActive = false;
+    countdownMotionFrames = 0;
     if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
     video.srcObject = null;
     lastFrame = null; stillSince = null;
@@ -747,7 +750,7 @@
   function tick(){
     loopHandle = requestAnimationFrame(tick);
     if(video.readyState < 2) return;
-    if(capturing) return; // countdown or capture in progress — don't fight it with new triggers
+    if(capturing && !countdownActive) return; // during countdown we still monitor movement so it can be cancelled
     if(gallerySheet.style.display === 'flex' || viewer.style.display === 'flex' || settingsSheet.style.display === 'flex') return; // paused while reviewing photos or in settings
 
     wctx.drawImage(video, 0, 0, work.width, work.height);
@@ -756,16 +759,34 @@
     if(lastFrame){
       let diff = 0;
       for(let i=0;i<frame.length;i+=4){
-        diff += Math.abs(frame[i]-lastFrame[i]);
+        // Use luminance-like RGB difference instead of the old R-only check.
+        const cur = 0.299*frame[i] + 0.587*frame[i+1] + 0.114*frame[i+2];
+        const prev = 0.299*lastFrame[i] + 0.587*lastFrame[i+1] + 0.114*lastFrame[i+2];
+        diff += Math.abs(cur-prev);
       }
       const avgDiff = diff / (frame.length/4); // 0..255ish
-      const threshold = 12 - sensitivity; // higher sensitivity -> lower threshold
+      const threshold = Math.max(3, 12 - sensitivity); // higher sensitivity -> lower threshold
       const now = performance.now();
 
-      if(now < cooldownUntil){
+      if(countdownActive){
+        // A countdown is only valid if the subject remains still.
+        // Require two consecutive moving frames to avoid cancelling on a
+        // single noisy/auto-exposure frame.
+        if(avgDiff >= threshold){
+          countdownMotionFrames++;
+          if(countdownMotionFrames >= 2){
+            cancelCaptureSequence('motion');
+            lastFrame = frame;
+            return;
+          }
+        } else {
+          countdownMotionFrames = 0;
+        }
+        setRing(1, 'still');
+      } else if(now < cooldownUntil){
         // cooling down after a capture
         setRing(0, 'cool');
-      } else if(avgDiff < Math.max(threshold,1)){
+      } else if(avgDiff < threshold){
         if(stillSince === null) stillSince = now;
         const held = now - stillSince;
         const pct = Math.min(held / holdMs, 1);
@@ -807,10 +828,29 @@
   // Shows a 3-2-1 countdown on screen, plays a shutter click on the actual
   // capture frame, then takes the photo. Used for both auto (still-pose)
   // and manual (shutter button) captures.
+  function cancelCaptureSequence(reason='motion'){
+    if(!capturing) return;
+    if(countdownInterval){
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+    countdownActive = false;
+    countdownMotionFrames = 0;
+    capturing = false;
+    stillSince = null;
+    lastFrame = null;
+    document.getElementById('countdownOverlay').style.display = 'none';
+    setRing(0, 'moving');
+    if(reason === 'motion') showToast(t('stateIdle'));
+  }
+
   function startCaptureSequence(){
     if(capturing) return;
     capturing = true;
+    countdownActive = true;
+    countdownMotionFrames = 0;
     stillSince = null;
+    lastFrame = null; // establish a fresh movement baseline during countdown
 
     const overlay = document.getElementById('countdownOverlay');
     const numEl = document.getElementById('countdownNum');
@@ -834,6 +874,7 @@
       } else {
         clearInterval(countdownInterval);
         countdownInterval = null;
+        countdownActive = false;
         overlay.style.display = 'none';
         playShutterSound();
         doCapture().finally(()=>{
@@ -1133,8 +1174,7 @@
     gallerySheet.style.display='flex';
     galGrid.innerHTML='';
     galEmpty.style.display = index.length===0 ? 'block':'none';
-    for(let i=0; i<index.length; i++){
-      const p = index[i];
+    for(const p of index){
       const val = await storeGet(p.key);
       if(!val) continue;
       const cell = document.createElement('div');
@@ -1174,7 +1214,7 @@
           cell.classList.toggle('selected');
           updateSelectBar();
         } else {
-          openViewer(p, i); // pass the exact array position directly — no re-lookup needed
+          openViewer(p);
         }
       };
       galGrid.appendChild(cell);
@@ -1245,9 +1285,9 @@
     requestAnimationFrame(snapTrackInstant); // re-assert on the next paint too, belt-and-suspenders against any layout timing race
   }
 
-  async function openViewer(p, idx){
-    if(idx == null) idx = index.findIndex(x => x.key === p.key);
-    if(idx === -1 || idx == null) return;
+  async function openViewer(p){
+    const idx = index.findIndex(x => x.key === p.key);
+    if(idx === -1) return;
     viewer.style.display='flex';
     history.pushState({modal:'viewer'}, '');
     await showPhotoAt(idx);
