@@ -1430,6 +1430,23 @@
         gif.addFrame(gctx, {copy:true, delay});
       }
 
+      let gifErrorShown = false;
+      const showGifError = (err)=>{
+        if(gifErrorShown) return;
+        gifErrorShown = true;
+        const msg = String(err && err.message || err || 'Unknown error');
+        console.error('gif encoder error:', err);
+        const friendly = /worker|download|fetch|HTTP/i.test(msg) ? t('gifWorkerFailedAlert') : t('gifFailedAlert');
+        // Keep the exact browser/encoder error visible so it can be read.
+        gifStatus.textContent = friendly + '  [' + msg + ']';
+        gifStatus.style.whiteSpace = 'pre-wrap';
+        gifStatus.style.userSelect = 'text';
+        gifCreateBtn.disabled = false;
+        setTimeout(()=>{
+          try{ alert(friendly + '\n\n오류 내용:\n' + msg); }catch(_){}
+        }, 100);
+      };
+
       gif.on('finished', (blob)=>{
         gifBlob = blob;
         gifPreviewImg.src = URL.createObjectURL(blob);
@@ -1438,12 +1455,12 @@
         gifSaveBtn.style.display = 'block';
         gifCreateBtn.disabled = false;
       });
+      // gif.js worker failures are asynchronous, so they do not reach the
+      // try/catch above. Listen for the encoder's error event as well.
+      gif.on('error', showGifError);
       gif.render();
     }catch(e){
-      console.error('gif build failed', e);
-      const msg = String(e && e.message || e);
-      gifStatus.textContent = /worker|download|fetch|HTTP/i.test(msg) ? t('gifWorkerFailedAlert') : t('gifFailedAlert');
-      gifCreateBtn.disabled = false;
+      showGifError(e);
     }
   }
   gifCreateBtn.onclick = buildGif;
