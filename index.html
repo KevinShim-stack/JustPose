@@ -503,6 +503,7 @@
       gifDoneStatus: 'Done! Preview below.',
       gifMinPhotosAlert: 'Select at least 2 photos to make a GIF.',
       gifFailedAlert: 'Could not create the GIF. Please try again.',
+      gifWorkerFailedAlert: 'GIF encoder could not be loaded. Check your internet connection and try again.',
       savedGifToast: 'GIF saved to device',
     },
     ko: {
@@ -558,6 +559,7 @@
       gifDoneStatus: '완성! 아래에서 미리 볼 수 있어요.',
       gifMinPhotosAlert: '사진을 2장 이상 선택해주세요.',
       gifFailedAlert: 'GIF 생성에 실패했어요. 다시 시도해주세요.',
+      gifWorkerFailedAlert: 'GIF 인코더를 불러오지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해주세요.',
       savedGifToast: 'GIF가 기기에 저장됐어요',
     }
   };
@@ -1346,6 +1348,18 @@
 
   document.getElementById('closeGifSheet').onclick = ()=> history.back();
 
+  let gifWorkerUrl = null;
+
+  async function getGifWorkerUrl(){
+    if(gifWorkerUrl) return gifWorkerUrl;
+    const workerUrl = 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js';
+    const response = await fetch(workerUrl, {cache:'force-cache'});
+    if(!response.ok) throw new Error('GIF worker download failed: HTTP ' + response.status);
+    const workerBlob = await response.blob();
+    gifWorkerUrl = URL.createObjectURL(workerBlob);
+    return gifWorkerUrl;
+  }
+
   async function buildGif(){
     if(typeof GIF === 'undefined'){
       gifStatus.textContent = t('gifFailedAlert');
@@ -1393,12 +1407,15 @@
       gifCanvas.width = gw; gifCanvas.height = gh;
       const gctx = gifCanvas.getContext('2d');
 
+      // gif.js workers can fail when the worker script itself is cross-origin.
+      // Fetch it first and create a same-origin Blob URL for the Worker.
+      const workerScript = await getGifWorkerUrl();
       const gif = new GIF({
         workers: 2,
         quality: 10,
         width: gw,
         height: gh,
-        workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
+        workerScript
       });
 
       const delay = Number(gifDelaySlider.value);
@@ -1424,11 +1441,14 @@
       gif.render();
     }catch(e){
       console.error('gif build failed', e);
-      gifStatus.textContent = t('gifFailedAlert');
+      const msg = String(e && e.message || e);
+      gifStatus.textContent = /worker|download|fetch|HTTP/i.test(msg) ? t('gifWorkerFailedAlert') : t('gifFailedAlert');
       gifCreateBtn.disabled = false;
     }
   }
   gifCreateBtn.onclick = buildGif;
+
+  window.addEventListener('pagehide', ()=>{ if(gifWorkerUrl){ URL.revokeObjectURL(gifWorkerUrl); gifWorkerUrl = null; } });
 
   gifSaveBtn.onclick = ()=>{
     if(!gifBlob) return;
