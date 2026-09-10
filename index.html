@@ -826,11 +826,13 @@
       numEl.style.animation = 'countPulse .9s ease-out';
     };
     showNum();
+    speakCountdown(n);
 
     countdownInterval = setInterval(()=>{
       n--;
       if(n > 0){
         showNum();
+        speakCountdown(n);
       } else {
         clearInterval(countdownInterval);
         countdownInterval = null;
@@ -842,6 +844,24 @@
         });
       }
     }, 1000);
+  }
+
+  // Spoken 3-2-1 countdown. Uses the browser/device's speech engine so
+  // Korean says "삼, 이, 일" and English says "three, two, one".
+  function speakCountdown(n){
+    if(!('speechSynthesis' in window)) return;
+    try{
+      window.speechSynthesis.cancel();
+      const words = lang === 'ko'
+        ? {3:'삼', 2:'이', 1:'일'}
+        : {3:'three', 2:'two', 1:'one'};
+      const u = new SpeechSynthesisUtterance(words[n] || String(n));
+      u.lang = lang === 'ko' ? 'ko-KR' : 'en-US';
+      u.rate = lang === 'ko' ? 0.9 : 0.85;
+      u.pitch = 1.0;
+      u.volume = Math.max(0.5, Math.min(1, shutterVolume));
+      window.speechSynthesis.speak(u);
+    }catch(e){ console.warn('countdown speech failed', e); }
   }
 
   // Shutter sound. Two flavors, both synthesized via WebAudio (no external
@@ -931,8 +951,9 @@
         // requested for smooth playback — the camera's actual still-photo
         // pipeline is often capable of much more. Ask for its true max.
         let opts = {};
+        let caps = null;
         try{
-          const caps = await imageCapture.getPhotoCapabilities();
+          caps = await imageCapture.getPhotoCapabilities();
           if(caps && caps.imageWidth && caps.imageHeight){
             opts = { imageWidth: caps.imageWidth.max, imageHeight: caps.imageHeight.max };
           }
