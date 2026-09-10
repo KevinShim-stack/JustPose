@@ -12,6 +12,10 @@
 <title>Just Pose</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- gif.js: pure client-side GIF encoder used by the "GIF 만들기" feature in
+     the gallery. No server involved — frames are rendered locally and
+     encoded via a Web Worker. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js"></script>
 <style>
   :root{
     --bg:#0A0B0D;
@@ -210,7 +214,15 @@
     border-top:1px solid var(--line);
   }
   #galSelectBar span{ font-size:13px; color:var(--muted); font-weight:600; }
-  #galDeleteSelected:disabled{ opacity:.35; }
+  #galDeleteSelected:disabled, #galMakeGif:disabled{ opacity:.35; }
+
+  /* GIF maker sheet */
+  #gifSheet{ position:absolute; inset:0; z-index:25; background:var(--bg); display:none; flex-direction:column; }
+  #gifStatus{ font-size:13px; color:var(--muted); text-align:center; }
+  #gifPreviewImg{ max-width:100%; border-radius:12px; margin-top:14px; display:none; border:1px solid var(--line); }
+  #gifActionBar{ display:flex; gap:10px; padding:14px 18px calc(env(safe-area-inset-bottom,0px) + 18px); border-top:1px solid var(--line); }
+  #gifActionBar .dangerbtn{ flex:1; text-align:center; }
+  #gifCreateBtn:disabled{ opacity:.5; }
 
   /* photo viewer */
   #viewer{
@@ -381,7 +393,27 @@
     </div>
     <div id="galSelectBar">
       <span id="galSelectCount"></span>
-      <button class="dangerbtn" id="galDeleteSelected" disabled></button>
+      <div style="display:flex; gap:8px;">
+        <button class="dangerbtn" id="galMakeGif" style="background:rgba(200,255,61,.12); border-color:rgba(200,255,61,.4); color:var(--accent);" disabled></button>
+        <button class="dangerbtn" id="galDeleteSelected" disabled></button>
+      </div>
+    </div>
+  </div>
+
+  <!-- GIF maker -->
+  <div id="gifSheet">
+    <div class="sheetHead"><h2 id="gifTitleText"></h2><button class="closebtn" id="closeGifSheet">✕</button></div>
+    <div class="sheetBody">
+      <div class="row">
+        <label><span id="lblGifDelay"></span><span class="val" id="gifDelayVal"></span></label>
+        <input type="range" id="gifDelaySlider" min="150" max="1000" step="50" value="400">
+      </div>
+      <div id="gifStatus"></div>
+      <img id="gifPreviewImg">
+    </div>
+    <div id="gifActionBar">
+      <button class="dangerbtn" id="gifCreateBtn" style="background:rgba(200,255,61,.12); border-color:rgba(200,255,61,.4); color:var(--accent);"></button>
+      <button class="dangerbtn" id="gifSaveBtn" style="display:none; background:rgba(200,255,61,.12); border-color:rgba(200,255,61,.4); color:var(--accent);"></button>
     </div>
   </div>
 
@@ -463,6 +495,15 @@
       secShort: 's',
       savedToast: 'Photo saved',
       savedDeviceToast: 'Saved to device',
+      makeGifBtn: 'GIF',
+      gifTitle: 'Create GIF',
+      gifDelayLabel: 'Frame speed',
+      gifCreateBtn: 'Create GIF',
+      gifCreatingStatus: 'Creating your GIF…',
+      gifDoneStatus: 'Done! Preview below.',
+      gifMinPhotosAlert: 'Select at least 2 photos to make a GIF.',
+      gifFailedAlert: 'Could not create the GIF. Please try again.',
+      savedGifToast: 'GIF saved to device',
     },
     ko: {
       title: 'Just Pose',
@@ -509,6 +550,15 @@
       secShort: '초',
       savedToast: '사진이 저장됐어요',
       savedDeviceToast: '기기에 저장됐어요',
+      makeGifBtn: 'GIF',
+      gifTitle: 'GIF 만들기',
+      gifDelayLabel: '프레임 속도',
+      gifCreateBtn: 'GIF 만들기',
+      gifCreatingStatus: 'GIF를 만드는 중...',
+      gifDoneStatus: '완성! 아래에서 미리 볼 수 있어요.',
+      gifMinPhotosAlert: '사진을 2장 이상 선택해주세요.',
+      gifFailedAlert: 'GIF 생성에 실패했어요. 다시 시도해주세요.',
+      savedGifToast: 'GIF가 기기에 저장됐어요',
     }
   };
 
@@ -1127,6 +1177,38 @@
     }
   }
 
+  // Generic version of saveToDevice's save logic, for blobs that aren't a
+  // plain JPEG data URL (e.g. an encoded GIF). Same two-path strategy:
+  // direct <a download> first, then Web Share API as a fallback.
+  async function saveBlobToDevice(blob, filename, toastMsg){
+    try{
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(()=> URL.revokeObjectURL(url), 4000);
+      showToast(toastMsg);
+      return;
+    }catch(e){
+      console.warn('direct download failed, falling back to share sheet', e);
+    }
+    try{
+      const file = new File([blob], filename, {type: blob.type || 'application/octet-stream'});
+      if(navigator.canShare && navigator.canShare({files:[file]})){
+        await navigator.share({files:[file], title: filename});
+        showToast(toastMsg);
+        return;
+      }
+    }catch(e){
+      if(e && e.name === 'AbortError') return;
+      console.error('device save failed completely', e);
+      alert(t('saveFailedAlert'));
+    }
+  }
+
   function manualCapture(){
     if(capturing) return;
     cooldownUntil = 0;
@@ -1147,11 +1229,22 @@
   const galSelectBar = document.getElementById('galSelectBar');
   const galSelectCount = document.getElementById('galSelectCount');
   const galDeleteSelected = document.getElementById('galDeleteSelected');
+  const galMakeGif = document.getElementById('galMakeGif');
+  const gifSheet = document.getElementById('gifSheet');
+  const gifDelaySlider = document.getElementById('gifDelaySlider');
+  const gifDelayVal = document.getElementById('gifDelayVal');
+  const gifStatus = document.getElementById('gifStatus');
+  const gifPreviewImg = document.getElementById('gifPreviewImg');
+  const gifCreateBtn = document.getElementById('gifCreateBtn');
+  const gifSaveBtn = document.getElementById('gifSaveBtn');
+  let gifBlob = null;
+  let gifKeysSnapshot = [];
 
   function updateSelectBar(){
     galSelectCount.textContent = t('selectedCount')(selectedKeys.size);
     galSelectBar.style.display = selectMode ? 'flex' : 'none';
     galDeleteSelected.disabled = selectedKeys.size===0;
+    galMakeGif.disabled = selectedKeys.size<2;
   }
 
   const LONG_PRESS_MS = 450;
@@ -1230,6 +1323,118 @@
     selectModeBtn.textContent = t('selectBtnOn');
     renderStreak(); renderStrip();
     openGallery();
+  };
+
+  // ---------- GIF maker ----------
+  gifDelaySlider.oninput = ()=>{ gifDelayVal.textContent = `${gifDelaySlider.value}ms`; };
+
+  galMakeGif.onclick = ()=>{
+    if(selectedKeys.size < 2) return;
+    // Order frames oldest -> newest so the GIF reads as a natural
+    // progression, regardless of the order the photos were tapped in.
+    gifKeysSnapshot = index.filter(p=> selectedKeys.has(p.key)).sort((a,b)=> a.ts-b.ts).map(p=> p.key);
+    gifBlob = null;
+    gifPreviewImg.style.display = 'none';
+    gifPreviewImg.src = '';
+    gifSaveBtn.style.display = 'none';
+    gifCreateBtn.disabled = false;
+    gifStatus.textContent = '';
+    gifDelayVal.textContent = `${gifDelaySlider.value}ms`;
+    history.pushState({modal:'gif'}, '');
+    gifSheet.style.display = 'flex';
+  };
+
+  document.getElementById('closeGifSheet').onclick = ()=> history.back();
+
+  async function buildGif(){
+    if(typeof GIF === 'undefined'){
+      gifStatus.textContent = t('gifFailedAlert');
+      return;
+    }
+    if(gifKeysSnapshot.length < 2){
+      gifStatus.textContent = t('gifMinPhotosAlert');
+      return;
+    }
+
+    gifCreateBtn.disabled = true;
+    gifSaveBtn.style.display = 'none';
+    gifPreviewImg.style.display = 'none';
+    gifStatus.textContent = t('gifCreatingStatus');
+
+    try{
+      const dataUrls = [];
+      for(const key of gifKeysSnapshot){
+        const val = await storeGet(key);
+        if(val) dataUrls.push(val);
+      }
+      if(dataUrls.length < 2){
+        gifStatus.textContent = t('gifMinPhotosAlert');
+        gifCreateBtn.disabled = false;
+        return;
+      }
+
+      const imgs = await Promise.all(dataUrls.map(src => new Promise((resolve, reject)=>{
+        const im = new Image();
+        im.onload = ()=> resolve(im);
+        im.onerror = reject;
+        im.src = src;
+      })));
+
+      // Photos can be up to 2880px on the long edge (ultra quality) — far
+      // more detail than a GIF needs. Capping this keeps file size and
+      // encode time reasonable.
+      const MAX_EDGE = 640;
+      const first = imgs[0];
+      const scale = Math.min(1, MAX_EDGE / Math.max(first.width, first.height));
+      const gw = Math.round(first.width * scale);
+      const gh = Math.round(first.height * scale);
+
+      const gifCanvas = document.createElement('canvas');
+      gifCanvas.width = gw; gifCanvas.height = gh;
+      const gctx = gifCanvas.getContext('2d');
+
+      const gif = new GIF({
+        workers: 2,
+        quality: 10,
+        width: gw,
+        height: gh,
+        workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
+      });
+
+      const delay = Number(gifDelaySlider.value);
+      for(const im of imgs){
+        // Cover-fit each frame into the shared canvas so photos with
+        // slightly different aspect ratios don't distort or letterbox.
+        const s = Math.max(gw / im.width, gh / im.height);
+        const dw = im.width * s, dh = im.height * s;
+        gctx.fillStyle = '#000';
+        gctx.fillRect(0, 0, gw, gh);
+        gctx.drawImage(im, (gw - dw) / 2, (gh - dh) / 2, dw, dh);
+        gif.addFrame(gctx, {copy:true, delay});
+      }
+
+      gif.on('finished', (blob)=>{
+        gifBlob = blob;
+        gifPreviewImg.src = URL.createObjectURL(blob);
+        gifPreviewImg.style.display = 'block';
+        gifStatus.textContent = t('gifDoneStatus');
+        gifSaveBtn.style.display = 'block';
+        gifCreateBtn.disabled = false;
+      });
+      gif.render();
+    }catch(e){
+      console.error('gif build failed', e);
+      gifStatus.textContent = t('gifFailedAlert');
+      gifCreateBtn.disabled = false;
+    }
+  }
+  gifCreateBtn.onclick = buildGif;
+
+  gifSaveBtn.onclick = ()=>{
+    if(!gifBlob) return;
+    const d = new Date();
+    const stamp = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}_${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}${String(d.getSeconds()).padStart(2,'0')}`;
+    saveBlobToDevice(gifBlob, `JustPose_${stamp}.gif`, t('savedGifToast'));
   };
 
   let currentIndex = -1; // position of currentViewing within the `index` array
@@ -1394,6 +1599,11 @@
   // exiting to the home screen. If nothing is open, we do nothing here and
   // let the normal back/exit behavior proceed.
   window.addEventListener('popstate', ()=>{
+    if(gifSheet.style.display === 'flex'){
+      gifSheet.style.display = 'none';
+      gifBlob = null;
+      return;
+    }
     if(viewer.style.display === 'flex'){
       viewer.style.display = 'none';
       lastFrame = null; stillSince = null;
@@ -1523,6 +1733,12 @@
 
     document.getElementById('saveDevicePhoto').textContent = t('saveDeviceBtn');
     document.getElementById('deletePhoto').textContent = t('deleteBtn');
+
+    galMakeGif.textContent = t('makeGifBtn');
+    document.getElementById('gifTitleText').textContent = t('gifTitle');
+    document.getElementById('lblGifDelay').textContent = t('gifDelayLabel');
+    gifCreateBtn.textContent = t('gifCreateBtn');
+    gifSaveBtn.textContent = t('saveDeviceBtn');
 
     updateHoldVal();
     updateSensVal();
