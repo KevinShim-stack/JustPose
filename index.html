@@ -863,7 +863,7 @@
   // ---------- Framing guide / position lock ----------
   function normalizedAnchor(a, w, h){
     if(!a || !w || !h) return null;
-    return {cx:a.cx/w, cy:a.cy/h, fw:a.w/w, fh:a.h/h};
+    return {cx:a.cx/w, cy:a.cy/h, fw:a.w/w, fh:a.h/h, bodyH:a.h/h, bodyW:a.w/w, faceW:(a.fw||a.w)/w, faceH:(a.fh||a.h)/h};
   }
 
   function updateGuideVisual(anchor){
@@ -879,11 +879,14 @@
     if(captureReferenceAnchor){
       const dx=Math.abs(anchor.cx-captureReferenceAnchor.cx);
       const dy=Math.abs(anchor.cy-captureReferenceAnchor.cy);
-      const ds=Math.abs(Math.log(Math.max(.001,anchor.fw)/Math.max(.001,captureReferenceAnchor.fw)));
-      good = dx < .075 && dy < .075 && ds < .16;
+      const ds=Math.abs(Math.log(Math.max(.001,anchor.bodyH)/Math.max(.001,captureReferenceAnchor.bodyH)));
+      const dw=Math.abs(Math.log(Math.max(.001,anchor.bodyW)/Math.max(.001,captureReferenceAnchor.bodyW)));
+      // Body height is the primary scale reference; width is secondary because
+      // arm position can change substantially between poses.
+      good = dx < .055 && dy < .055 && ds < .10 && dw < .18;
     } else {
-      // Before the first shot, keep the face near the upper-middle guide.
-      good = anchor.cx > .36 && anchor.cx < .64 && anchor.cy > .14 && anchor.cy < .42;
+      // Before the first shot, keep the whole body centered in the guide.
+      good = anchor.cx > .30 && anchor.cx < .70 && anchor.cy > .18 && anchor.cy < .62 && anchor.bodyH > .30 && anchor.bodyH < .88;
     }
     poseGuide.classList.toggle('locked', good);
     poseGuide.classList.toggle('warning', !good);
@@ -1487,12 +1490,11 @@
     return gifWorkerUrl;
   }
 
-  // ---------- GIF person alignment ----------
-  // Aligns each GIF frame to the first frame using the face as an anchor.
-  // FaceDetector is used when the browser supports it; otherwise a small
-  // skin-tone search in the upper/central part of the image provides a
-  // lightweight fallback. This changes only the GIF output — original photos
-  // remain untouched.
+  // ---------- Person/body alignment ----------
+  // Uses the face as a reliable landmark when FaceDetector is available, then
+  // expands it into a conservative full-body box. This keeps the capture guide
+  // based on the person's overall framing instead of only the face.
+  // The estimated box is intentionally tolerant of arm/leg movement.
   let faceDetectorInstance = null;
   function getFaceDetector(){
     try{
@@ -1502,6 +1504,18 @@
     }catch(e){ return null; }
   }
 
+  function makeBodyAnchor(cx, cy, faceW, faceH, imgW, imgH, source){
+    // Typical standing framing: the body is roughly 3.8 face-widths wide and
+    // 7.5 face-heights tall. Clamp to the image so extreme close-ups don't
+    // produce an unusably large box.
+    const bw = Math.min(imgW * 0.82, Math.max(faceW * 3.8, faceH * 2.4));
+    const bh = Math.min(imgH * 0.92, Math.max(faceH * 7.5, faceW * 4.8));
+    const bodyCx = Math.max(bw/2, Math.min(imgW-bw/2, cx));
+    const top = Math.max(0, cy - faceH*1.15);
+    const bodyCy = Math.max(bh/2, Math.min(imgH-bh/2, top + bh/2));
+    return {cx:bodyCx, cy:bodyCy, w:bw, h:bh, fw:faceW, fh:faceH, source};
+  }
+
   async function detectPersonAnchor(img){
     const detector = getFaceDetector();
     if(detector){
@@ -1509,13 +1523,17 @@
         const faces = await detector.detect(img);
         if(faces && faces.length){
           const r = faces[0].boundingBox;
-          return {cx:r.x+r.width/2, cy:r.y+r.height/2, w:r.width, h:r.height, source:'face'};
+          return makeBodyAnchor(
+            r.x+r.width/2, r.y+r.height/2,
+            r.width, r.height,
+            img.width, img.height, 'pose-face'
+          );
         }
       }catch(e){ /* fall through to lightweight fallback */ }
     }
 
-    // Fallback: search for the densest skin-tone patch in the upper-middle
-    // region, where the face normally is. Work at low resolution for speed.
+    // Fallback: find a likely head/skin patch, then build the same body box.
+    // This keeps the feature usable on browsers without FaceDetector.
     try{
       const c = document.createElement('canvas');
       const W=160, H=Math.max(90, Math.round(160*img.height/img.width));
@@ -1553,13 +1571,11 @@
         }
       }
       if(best && best.score>0.20){
-        return {
-          cx:(best.x+best.win/2)*img.width/W,
-          cy:(best.y+best.win/2)*img.height/H,
-          w:best.win*img.width/W,
-          h:best.win*img.height/H,
-          source:'skin'
-        };
+        const fx=(best.x+best.win/2)*img.width/W;
+        const fy=(best.y+best.win/2)*img.height/H;
+        const fw=best.win*img.width/W;
+        const fh=best.win*img.height/H;
+        return makeBodyAnchor(fx,fy,fw,fh,img.width,img.height,'pose-skin');
       }
     }catch(e){ /* no alignment data */ }
     return null;
@@ -1661,7 +1677,7 @@
       const refBaseW = imgs[0].width * refBaseScale, refBaseH = imgs[0].height * refBaseScale;
       const targetCx = ref ? ref.cx * refBaseScale + (gw-refBaseW)/2 : gw/2;
       const targetCy = ref ? ref.cy * refBaseScale + (gh-refBaseH)/2 : gh*0.34;
-      const targetFaceW = ref ? Math.max(18, Math.min(gw*0.30, ref.w*refBaseScale)) : 0;
+      const targetBodyH = ref ? Math.max(80, Math.min(gh*0.82, ref.h*refBaseScale)) : 0;
       let alignedCount = 0;
       for(let idx=0; idx<imgs.length; idx++){
         const im = imgs[idx];
@@ -1671,15 +1687,15 @@
 
         // First normalize each source image to the GIF canvas. Then, when a
         // face/person anchor is available, apply a uniform scale + translation
-        // so the person's head stays at the same location and size as frame 1.
+        // so the person's body stays at the same location and size as frame 1.
         const baseScale = Math.max(gw / im.width, gh / im.height);
         const baseW = im.width * baseScale, baseH = im.height * baseScale;
         let tx=(gw-baseW)/2, ty=(gh-baseH)/2, sc=baseScale;
 
         const a=alignment.anchors[idx];
         if(ref && a){
-          const desiredScale = targetFaceW / Math.max(1, a.w*baseScale);
-          const personScale = Math.max(0.78, Math.min(1.28, desiredScale));
+          const desiredScale = targetBodyH / Math.max(1, a.h*baseScale);
+          const personScale = Math.max(0.82, Math.min(1.22, desiredScale));
           sc = baseScale * personScale;
           const ax = a.cx * sc, ay = a.cy * sc;
           tx = targetCx - ax;
