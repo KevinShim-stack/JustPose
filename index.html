@@ -338,6 +338,13 @@
         </select>
       </div>
       <div class="row">
+        <label><span id="lblCamera"></span></label>
+        <select id="cameraSelect" style="width:100%; background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:12px; font-size:14px; font-family:'Space Grotesk',sans-serif;">
+          <option value="user" id="optCameraFront"></option>
+          <option value="environment" id="optCameraRear"></option>
+        </select>
+      </div>
+      <div class="row">
         <label><span id="lblShutterType"></span></label>
         <select id="shutterTypeSelect" style="width:100%; background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:12px; font-size:14px; font-family:'Space Grotesk',sans-serif;">
           <option value="film" id="optFilm"></option>
@@ -535,7 +542,7 @@
   work.width = 64; work.height = 48;
 
   let stream = null;
-  let facingMode = 'user';
+  let facingMode = 'user'; // 기본: 전면 카메라
   let holdMs = 3000;       // slider default 3 -> *1000
   let sensitivity = 5;     // 1..9, higher = more sensitive (smaller threshold)
   let cooldownMs = 4000;
@@ -543,9 +550,9 @@
   let shutterVolume = 0.85;  // 0..1
   let qualityPreset = 'high'; // 'standard' | 'high' | 'ultra'
   const QUALITY_PRESETS = {
-    standard: { w:1080, h:1440, jpeg:0.85 },
-    high:     { w:1920, h:2560, jpeg:0.94 },
-    ultra:    { w:2880, h:3840, jpeg:0.97 },
+    standard: { w:1080, h:1440, jpeg:0.90 },
+    high:     { w:1920, h:2560, jpeg:0.97 },
+    ultra:    { w:2880, h:3840, jpeg:0.985 },
   };
   let lastFrame = null;
   let stillSince = null;
@@ -668,7 +675,7 @@
       const q = QUALITY_PRESETS[qualityPreset] || QUALITY_PRESETS.high;
       stream = await navigator.mediaDevices.getUserMedia({
         video:{
-          facingMode, width:{ideal:q.w}, height:{ideal:q.h},
+          facingMode, width:{ideal:q.w, min:640}, height:{ideal:q.h, min:480}, resizeMode:'none',
           // Ask for continuous autofocus/exposure/white-balance up front.
           // Browsers that don't recognize these simply ignore them, so this
           // is safe even on devices/browsers without camera-control support.
@@ -691,10 +698,14 @@
         const track = stream.getVideoTracks()[0];
         const caps = track.getCapabilities ? track.getCapabilities() : {};
         const advanced = {};
+        if(caps.width && caps.width.max) advanced.width = caps.width.max;
+        if(caps.height && caps.height.max) advanced.height = caps.height.max;
+        if(caps.noiseReductionMode && caps.noiseReductionMode.includes('highQuality')) advanced.noiseReductionMode = 'highQuality';
+        if(caps.edgeEnhancementMode && caps.edgeEnhancementMode.includes('highQuality')) advanced.edgeEnhancementMode = 'highQuality';
         if(caps.focusMode && caps.focusMode.includes('continuous')) advanced.focusMode = 'continuous';
         if(caps.exposureMode && caps.exposureMode.includes('continuous')) advanced.exposureMode = 'continuous';
         if(caps.whiteBalanceMode && caps.whiteBalanceMode.includes('continuous')) advanced.whiteBalanceMode = 'continuous';
-        if(Object.keys(advanced).length) await track.applyConstraints({advanced:[advanced]});
+        if(Object.keys(advanced).length){ try{ await track.applyConstraints({advanced:[advanced]}); }catch(e){ console.warn('optional camera enhancement constraints unavailable', e); } }
       }catch(e){
         console.warn('could not explicitly set continuous autofocus', e);
       }
@@ -929,7 +940,14 @@
           console.warn('getPhotoCapabilities unavailable, using default takePhoto size', e);
         }
 
-        const blob = await imageCapture.takePhoto(opts);
+        let blob;
+        try { blob = await imageCapture.takePhoto(opts); }
+        catch(e) {
+          const safeOpts = {};
+          if(caps && caps.imageWidth && caps.imageWidth.max) safeOpts.imageWidth = caps.imageWidth.max;
+          if(caps && caps.imageHeight && caps.imageHeight.max) safeOpts.imageHeight = caps.imageHeight.max;
+          blob = await imageCapture.takePhoto(safeOpts);
+        }
         sourceImg = await createImageBitmap(blob);
         srcW = sourceImg.width; srcH = sourceImg.height;
       }
@@ -962,7 +980,7 @@
     // it a gentle boost in the same direction — a bit more contrast/
     // saturation while drawing, then an edge-sharpening pass afterward —
     // to partially close that gap.
-    cctx.filter = 'contrast(1.08) saturate(1.12) brightness(1.02)';
+    cctx.filter = 'contrast(1.03) saturate(1.04) brightness(1.01)';
     cctx.drawImage(sourceImg,0,0,vw,vh);
     cctx.filter = 'none';
     sharpenCanvas(cctx, vw, vh);
@@ -994,7 +1012,7 @@
   // captured through the web camera API, which doesn't get any of that
   // processing on its own.
   function sharpenCanvas(cctx, w, h, amount){
-    amount = amount == null ? 0.4 : amount;
+    amount = amount == null ? (w >= 2500 ? 0.22 : w >= 1800 ? 0.28 : 0.34) : amount;
     if(w < 3 || h < 3) return; // too small to matter, avoid edge-case math
     let imgData;
     try{
@@ -1407,6 +1425,13 @@
     updateCooldownVal();
   };
 
+  const cameraSelect = document.getElementById('cameraSelect');
+  cameraSelect.value = facingMode;
+  cameraSelect.onchange = ()=>{
+    facingMode = cameraSelect.value;
+    if(cameraActive) startCamera();
+  };
+
   const shutterTypeSelect = document.getElementById('shutterTypeSelect');
   shutterTypeSelect.value = shutterType;
   shutterTypeSelect.onchange = ()=>{
@@ -1491,6 +1516,7 @@
   // ---------- Controls ----------
   document.getElementById('flipBtn').onclick = ()=>{
     facingMode = facingMode==='user' ? 'environment' : 'user';
+    cameraSelect.value = facingMode;
     startCamera();
   };
   shutterBtn.onclick = manualCapture;
