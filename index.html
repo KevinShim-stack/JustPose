@@ -1588,6 +1588,29 @@
     gifPreviewImg.style.display = 'none';
     gifStatus.textContent = t('gifCreatingStatus');
 
+    // Declared here (function scope), not inside try{}, so it's reachable
+    // from the catch block below as well as from gif.js's async 'error'
+    // event. Previously this lived inside try{} and was invisible to
+    // catch{}, so any failure before the encoder was created (worker fetch,
+    // image decode, etc.) threw a second, unhandled ReferenceError instead
+    // of showing a message — leaving the button stuck disabled forever.
+    let gifErrorShown = false;
+    const showGifError = (err)=>{
+      if(gifErrorShown) return;
+      gifErrorShown = true;
+      const msg = String(err && err.message || err || 'Unknown error');
+      console.error('gif encoder error:', err);
+      const friendly = /worker|download|fetch|HTTP/i.test(msg) ? t('gifWorkerFailedAlert') : t('gifFailedAlert');
+      // Keep the exact browser/encoder error visible so it can be read.
+      gifStatus.textContent = friendly + '  [' + msg + ']';
+      gifStatus.style.whiteSpace = 'pre-wrap';
+      gifStatus.style.userSelect = 'text';
+      gifCreateBtn.disabled = false;
+      setTimeout(()=>{
+        try{ alert(friendly + '\n\n오류 내용:\n' + msg); }catch(_){}
+      }, 100);
+    };
+
     try{
       const dataUrls = [];
       for(const key of gifKeysSnapshot){
@@ -1673,23 +1696,6 @@
           ? (t('gifAlignStatus') + ` (${alignedCount}/${imgs.length})`)
           : t('gifAlignFallbackStatus');
       }
-
-      let gifErrorShown = false;
-      const showGifError = (err)=>{
-        if(gifErrorShown) return;
-        gifErrorShown = true;
-        const msg = String(err && err.message || err || 'Unknown error');
-        console.error('gif encoder error:', err);
-        const friendly = /worker|download|fetch|HTTP/i.test(msg) ? t('gifWorkerFailedAlert') : t('gifFailedAlert');
-        // Keep the exact browser/encoder error visible so it can be read.
-        gifStatus.textContent = friendly + '  [' + msg + ']';
-        gifStatus.style.whiteSpace = 'pre-wrap';
-        gifStatus.style.userSelect = 'text';
-        gifCreateBtn.disabled = false;
-        setTimeout(()=>{
-          try{ alert(friendly + '\n\n오류 내용:\n' + msg); }catch(_){}
-        }, 100);
-      };
 
       gif.on('finished', (blob)=>{
         gifBlob = blob;
