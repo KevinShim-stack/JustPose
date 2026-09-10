@@ -408,6 +408,10 @@
         <label><span id="lblGifDelay"></span><span class="val" id="gifDelayVal"></span></label>
         <input type="range" id="gifDelaySlider" min="150" max="1000" step="50" value="400">
       </div>
+      <div class="row" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <label for="gifAlignToggle" style="margin:0;"><span id="lblGifAlign"></span></label>
+        <input type="checkbox" id="gifAlignToggle" checked style="width:22px;height:22px;accent-color:var(--accent);">
+      </div>
       <div id="gifStatus"></div>
       <img id="gifPreviewImg">
     </div>
@@ -498,12 +502,15 @@
       makeGifBtn: 'GIF',
       gifTitle: 'Create GIF',
       gifDelayLabel: 'Frame speed',
+      gifAlignLabel: 'Auto-align person',
       gifCreateBtn: 'Create GIF',
       gifCreatingStatus: 'Creating your GIF…',
       gifDoneStatus: 'Done! Preview below.',
       gifMinPhotosAlert: 'Select at least 2 photos to make a GIF.',
       gifFailedAlert: 'Could not create the GIF. Please try again.',
       gifWorkerFailedAlert: 'GIF encoder could not be loaded. Check your internet connection and try again.',
+      gifAlignStatus: 'Person position and size were auto-aligned',
+      gifAlignFallbackStatus: 'Person detection was unavailable, so standard alignment was used',
       savedGifToast: 'GIF saved to device',
     },
     ko: {
@@ -554,12 +561,15 @@
       makeGifBtn: 'GIF',
       gifTitle: 'GIF 만들기',
       gifDelayLabel: '프레임 속도',
+      gifAlignLabel: '인물 자동 정렬',
       gifCreateBtn: 'GIF 만들기',
       gifCreatingStatus: 'GIF를 만드는 중...',
       gifDoneStatus: '완성! 아래에서 미리 볼 수 있어요.',
       gifMinPhotosAlert: '사진을 2장 이상 선택해주세요.',
       gifFailedAlert: 'GIF 생성에 실패했어요. 다시 시도해주세요.',
       gifWorkerFailedAlert: 'GIF 인코더를 불러오지 못했어요. 인터넷 연결을 확인한 뒤 다시 시도해주세요.',
+      gifAlignStatus: '인물 위치와 크기를 자동으로 맞췄어요',
+      gifAlignFallbackStatus: '인물을 정확히 찾지 못해 기본 정렬로 만들었어요',
       savedGifToast: 'GIF가 기기에 저장됐어요',
     }
   };
@@ -1234,6 +1244,7 @@
   const galMakeGif = document.getElementById('galMakeGif');
   const gifSheet = document.getElementById('gifSheet');
   const gifDelaySlider = document.getElementById('gifDelaySlider');
+  const gifAlignToggle = document.getElementById('gifAlignToggle');
   const gifDelayVal = document.getElementById('gifDelayVal');
   const gifStatus = document.getElementById('gifStatus');
   const gifPreviewImg = document.getElementById('gifPreviewImg');
@@ -1360,6 +1371,92 @@
     return gifWorkerUrl;
   }
 
+  // ---------- GIF person alignment ----------
+  // Aligns each GIF frame to the first frame using the face as an anchor.
+  // FaceDetector is used when the browser supports it; otherwise a small
+  // skin-tone search in the upper/central part of the image provides a
+  // lightweight fallback. This changes only the GIF output — original photos
+  // remain untouched.
+  let faceDetectorInstance = null;
+  function getFaceDetector(){
+    try{
+      if(!('FaceDetector' in window)) return null;
+      if(!faceDetectorInstance) faceDetectorInstance = new FaceDetector({fastMode:true, maxDetectedFaces:1});
+      return faceDetectorInstance;
+    }catch(e){ return null; }
+  }
+
+  async function detectPersonAnchor(img){
+    const detector = getFaceDetector();
+    if(detector){
+      try{
+        const faces = await detector.detect(img);
+        if(faces && faces.length){
+          const r = faces[0].boundingBox;
+          return {cx:r.x+r.width/2, cy:r.y+r.height/2, w:r.width, h:r.height, source:'face'};
+        }
+      }catch(e){ /* fall through to lightweight fallback */ }
+    }
+
+    // Fallback: search for the densest skin-tone patch in the upper-middle
+    // region, where the face normally is. Work at low resolution for speed.
+    try{
+      const c = document.createElement('canvas');
+      const W=160, H=Math.max(90, Math.round(160*img.height/img.width));
+      c.width=W; c.height=H;
+      const x=c.getContext('2d',{willReadFrequently:true});
+      x.drawImage(img,0,0,W,H);
+      const d=x.getImageData(0,0,W,H).data;
+      const skin=new Uint8Array(W*H);
+      for(let y=0;y<H*0.48;y++){
+        for(let xx=Math.round(W*0.18);xx<Math.round(W*0.82);xx++){
+          const i=(y*W+xx)*4, r=d[i], g=d[i+1], b=d[i+2];
+          const mx=Math.max(r,g,b), mn=Math.min(r,g,b);
+          const looksSkin = r>55 && g>30 && b>18 && r>g*1.06 && g>b*1.04 && (r-b)>22 && (mx-mn)>18;
+          if(looksSkin) skin[y*W+xx]=1;
+        }
+      }
+      const integral=new Uint32Array((W+1)*(H+1));
+      for(let y=0;y<H;y++){
+        let row=0;
+        for(let xx=0;xx<W;xx++){
+          row += skin[y*W+xx];
+          integral[(y+1)*(W+1)+(xx+1)] = integral[y*(W+1)+(xx+1)] + row;
+        }
+      }
+      let best=null;
+      for(const win of [14,18,22,26]){
+        for(let y=8;y<Math.floor(H*0.44);y+=3){
+          for(let xx=Math.floor(W*0.22);xx<=Math.floor(W*0.72);xx+=3){
+            const x2=Math.min(W,xx+win), y2=Math.min(H,y+win);
+            const sum=integral[y2*(W+1)+x2]-integral[y*(W+1)+x2]-integral[y2*(W+1)+xx]+integral[y*(W+1)+xx];
+            const area=(x2-xx)*(y2-y);
+            const score=sum/area;
+            if(!best || score>best.score) best={score,x:xx,y,win};
+          }
+        }
+      }
+      if(best && best.score>0.20){
+        return {
+          cx:(best.x+best.win/2)*img.width/W,
+          cy:(best.y+best.win/2)*img.height/H,
+          w:best.win*img.width/W,
+          h:best.win*img.height/H,
+          source:'skin'
+        };
+      }
+    }catch(e){ /* no alignment data */ }
+    return null;
+  }
+
+  async function prepareGifAlignment(imgs, gw, gh){
+    const anchors=[];
+    for(const im of imgs) anchors.push(await detectPersonAnchor(im));
+    const ref=anchors[0];
+    if(!ref) return {anchors, ref:null};
+    return {anchors, ref};
+  }
+
   async function buildGif(){
     if(typeof GIF === 'undefined'){
       gifStatus.textContent = t('gifFailedAlert');
@@ -1419,15 +1516,46 @@
       });
 
       const delay = Number(gifDelaySlider.value);
-      for(const im of imgs){
-        // Cover-fit each frame into the shared canvas so photos with
-        // slightly different aspect ratios don't distort or letterbox.
-        const s = Math.max(gw / im.width, gh / im.height);
-        const dw = im.width * s, dh = im.height * s;
+      const alignment = gifAlignToggle.checked ? await prepareGifAlignment(imgs, gw, gh) : {anchors:[], ref:null};
+      const ref = alignment.ref;
+      const refBaseScale = ref ? Math.max(gw / imgs[0].width, gh / imgs[0].height) : 1;
+      const refBaseW = imgs[0].width * refBaseScale, refBaseH = imgs[0].height * refBaseScale;
+      const targetCx = ref ? ref.cx * refBaseScale + (gw-refBaseW)/2 : gw/2;
+      const targetCy = ref ? ref.cy * refBaseScale + (gh-refBaseH)/2 : gh*0.34;
+      const targetFaceW = ref ? Math.max(18, Math.min(gw*0.30, ref.w*refBaseScale)) : 0;
+      let alignedCount = 0;
+      for(let idx=0; idx<imgs.length; idx++){
+        const im = imgs[idx];
+        gctx.setTransform(1,0,0,1,0,0);
         gctx.fillStyle = '#000';
         gctx.fillRect(0, 0, gw, gh);
-        gctx.drawImage(im, (gw - dw) / 2, (gh - dh) / 2, dw, dh);
+
+        // First normalize each source image to the GIF canvas. Then, when a
+        // face/person anchor is available, apply a uniform scale + translation
+        // so the person's head stays at the same location and size as frame 1.
+        const baseScale = Math.max(gw / im.width, gh / im.height);
+        const baseW = im.width * baseScale, baseH = im.height * baseScale;
+        let tx=(gw-baseW)/2, ty=(gh-baseH)/2, sc=baseScale;
+
+        const a=alignment.anchors[idx];
+        if(ref && a){
+          const desiredScale = targetFaceW / Math.max(1, a.w*baseScale);
+          const personScale = Math.max(0.78, Math.min(1.28, desiredScale));
+          sc = baseScale * personScale;
+          const ax = a.cx * sc, ay = a.cy * sc;
+          tx = targetCx - ax;
+          ty = targetCy - ay;
+          alignedCount++;
+        }
+        gctx.setTransform(sc,0,0,sc,tx,ty);
+        gctx.drawImage(im,0,0);
+        gctx.setTransform(1,0,0,1,0,0);
         gif.addFrame(gctx, {copy:true, delay});
+      }
+      if(gifAlignToggle.checked){
+        gifStatus.textContent = alignedCount >= 2
+          ? (t('gifAlignStatus') + ` (${alignedCount}/${imgs.length})`)
+          : t('gifAlignFallbackStatus');
       }
 
       let gifErrorShown = false;
