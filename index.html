@@ -63,6 +63,28 @@
   }
   #toast .dot{ width:7px; height:7px; border-radius:50%; background:var(--accent); flex-shrink:0; }
 
+  /* Capture result preview — quick visual confirmation after each shot */
+  #capturePreview{
+    position:absolute; left:50%; top:118px; z-index:51;
+    transform:translateX(-50%) translateY(-8px) scale(.97);
+    width:min(72vw,260px); padding:7px; border-radius:16px;
+    background:rgba(10,11,13,.92); border:1px solid var(--line);
+    box-shadow:0 12px 36px rgba(0,0,0,.55);
+    opacity:0; pointer-events:none;
+    transition:opacity .2s ease, transform .2s ease;
+  }
+  #capturePreview.show{
+    opacity:1; transform:translateX(-50%) translateY(0) scale(1);
+  }
+  #capturePreview img{
+    display:block; width:100%; aspect-ratio:3/4; object-fit:cover;
+    border-radius:11px; background:#050607;
+  }
+  #capturePreview .previewLabel{
+    padding:7px 3px 2px; text-align:center;
+    font-size:11px; font-weight:700; color:var(--text);
+  }
+
   #countdownOverlay{
     position:absolute; inset:0; z-index:6; display:none;
     align-items:center; justify-content:center; pointer-events:none;
@@ -306,6 +328,12 @@
     font-family:'Space Grotesk',sans-serif;
   }
   .langBtn.active{ background:var(--accent); color:#0A0B0D; border-color:var(--accent); }
+  .templateBtn{
+    width:100%; padding:11px 14px; border-radius:10px;
+    background:var(--card); border:1px solid var(--line); color:var(--text);
+    font-family:'Space Grotesk',sans-serif; font-size:13px; font-weight:700;
+  }
+  .templateBtn:disabled{ opacity:.45; }
 </style>
 </head>
 <body>
@@ -324,6 +352,10 @@
     </div>
     <div id="flash"></div>
     <div id="toast"><div class="dot"></div><span id="toastText"></span></div>
+    <div id="capturePreview">
+      <img id="capturePreviewImg" alt="">
+      <div class="previewLabel" id="capturePreviewLabel"></div>
+    </div>
     <div id="countdownOverlay"><div id="countdownNum">3</div></div>
 
     <div id="topbar">
@@ -399,6 +431,10 @@
       <div class="row">
         <label><span id="lblShutterVol"></span> <span class="val" id="shutterVolVal"></span></label>
         <input type="range" id="shutterVolSlider" min="0" max="100" value="85">
+      </div>
+      <div class="row">
+        <label><span id="lblTemplate"></span></label>
+        <button class="templateBtn" id="resetTemplateBtn" type="button"></button>
       </div>
       <div class="row">
         <label><span id="lblLanguage"></span></label>
@@ -482,6 +518,39 @@
   let guideCheckBusy = false;
   let guideLastCheck = 0;
   let guideGood = false;
+  let templateByCamera = {};
+  let previewTimer = null;
+
+  function loadPoseTemplates(){
+    try{
+      const raw = localStorage.getItem('just_pose_templates_v1');
+      templateByCamera = raw ? JSON.parse(raw) : {};
+    }catch(e){ templateByCamera = {}; }
+    captureReferenceAnchor = templateByCamera[facingMode] || null;
+  }
+  function savePoseTemplate(anchor){
+    if(!anchor) return;
+    templateByCamera[facingMode] = anchor;
+    try{ localStorage.setItem('just_pose_templates_v1', JSON.stringify(templateByCamera)); }catch(e){}
+    captureReferenceAnchor = anchor;
+    updateGuideVisual(anchor);
+    updateTemplateButton();
+  }
+  function clearPoseTemplate(){
+    delete templateByCamera[facingMode];
+    try{ localStorage.setItem('just_pose_templates_v1', JSON.stringify(templateByCamera)); }catch(e){}
+    captureReferenceAnchor = null;
+    guideGood = false;
+    updateGuideVisual(null);
+    updateTemplateButton();
+    showToast(t('templateResetToast'));
+  }
+  function updateTemplateButton(){
+    if(!resetTemplateBtn) return;
+    const active = !!captureReferenceAnchor;
+    resetTemplateBtn.textContent = active ? t('resetTemplate') : t('templateSetHint');
+    resetTemplateBtn.disabled = !active;
+  }
 
   const wctx = work.getContext('2d', {willReadFrequently:true});
   const flashEl = document.getElementById('flash');
@@ -491,6 +560,10 @@
   const shutterBtn = document.getElementById('shutter');
   const streakText = document.getElementById('streakText');
   const strip = document.getElementById('strip');
+  const capturePreview = document.getElementById('capturePreview');
+  const capturePreviewImg = document.getElementById('capturePreviewImg');
+  const capturePreviewLabel = document.getElementById('capturePreviewLabel');
+  const resetTemplateBtn = document.getElementById('resetTemplateBtn');
 
   // ---------- i18n ----------
   const translations = {
@@ -798,6 +871,9 @@
       document.getElementById('permissionSheet').style.display='none';
       lastFrame = null; stillSince = null;
       cameraActive = true;
+      loadPoseTemplates();
+      updateGuideVisual(captureReferenceAnchor);
+      updateTemplateButton();
 
       // Belt-and-suspenders: explicitly (re)apply continuous autofocus via
       // the track's own constraints too, since some devices only honor it
@@ -837,8 +913,10 @@
     if(stream){ stream.getTracks().forEach(t=>t.stop()); stream = null; }
     video.srcObject = null;
     lastFrame = null; stillSince = null;
-    captureReferenceAnchor = null; guideAnchor = null; guideGood = false;
-    updateGuideVisual(null);
+    // Keep the pose template across camera pauses/backgrounding.
+    guideAnchor = null; guideGood = false;
+    updateGuideVisual(captureReferenceAnchor);
+    updateTemplateButton();
   }
 
   // Pause/resume around screen-off, app backgrounding, and tab switching.
@@ -883,7 +961,11 @@
     }
     poseGuide.classList.toggle('locked', good);
     poseGuide.classList.toggle('warning', !good);
-    poseGuideLabel.textContent = good ? t('poseGuideGood') : t('poseGuideMove');
+    if(captureReferenceAnchor){
+      poseGuideLabel.textContent = good ? t('templateSet') : t('poseGuideMove');
+    }else{
+      poseGuideLabel.textContent = good ? t('poseGuideGood') : t('poseGuideMove');
+    }
     guideGood = good;
   }
 
@@ -912,24 +994,65 @@
     const frame = wctx.getImageData(0,0,work.width,work.height).data;
 
     if(lastFrame){
-      let diff = 0;
-      for(let i=0;i<frame.length;i+=4){
-        diff += Math.abs(frame[i]-lastFrame[i]);
-      }
-      const avgDiff = diff / (frame.length/4); // 0..255ish
-      const threshold = 12 - sensitivity; // higher sensitivity -> lower threshold
+      // Motion is measured mainly inside the person's/template region.
+      // This makes exposure flicker and background movement much less likely
+      // to reset the stillness timer.
       const now = performance.now();
+      let x0=0, y0=0, x1=work.width, y1=work.height;
+      const ref = captureReferenceAnchor || guideAnchor;
+      if(ref){
+        const rw = Math.max(ref.bodyW, .22);
+        const rh = Math.max(ref.bodyH, .32);
+        x0 = Math.max(0, Math.floor((ref.cx-rw*.62)*work.width));
+        x1 = Math.min(work.width, Math.ceil((ref.cx+rw*.62)*work.width));
+        y0 = Math.max(0, Math.floor((ref.cy-rh*.58)*work.height));
+        y1 = Math.min(work.height, Math.ceil((ref.cy+rh*.62)*work.height));
+      }
+
+      let sumDiff=0, sumDelta=0, count=0;
+      // First pass estimates global brightness drift inside the ROI.
+      for(let y=y0;y<y1;y++){
+        for(let x=x0;x<x1;x++){
+          const i=(y*work.width+x)*4;
+          const lum=(frame[i]*.299 + frame[i+1]*.587 + frame[i+2]*.114);
+          const oldLum=(lastFrame[i]*.299 + lastFrame[i+1]*.587 + lastFrame[i+2]*.114);
+          sumDelta += lum-oldLum;
+          count++;
+        }
+      }
+      const meanDelta = count ? sumDelta/count : 0;
+      for(let y=y0;y<y1;y++){
+        for(let x=x0;x<x1;x++){
+          const i=(y*work.width+x)*4;
+          const lum=(frame[i]*.299 + frame[i+1]*.587 + frame[i+2]*.114);
+          const oldLum=(lastFrame[i]*.299 + lastFrame[i+1]*.587 + lastFrame[i+2]*.114);
+          sumDiff += Math.abs((lum-oldLum)-meanDelta);
+        }
+      }
+      const avgDiff = count ? sumDiff/count : 255;
+      // Existing sensitivity scale, but with a slightly more forgiving floor.
+      const threshold = 10.5 - sensitivity * .85;
 
       if(now < cooldownUntil){
-        // cooling down after a capture
         setRing(0, 'cool');
-      } else if(avgDiff < Math.max(threshold,1)){
+      } else if(avgDiff < Math.max(threshold,1.5)){
         if(stillSince === null) stillSince = now;
         const held = now - stillSince;
         const pct = Math.min(held / holdMs, 1);
         setRing(pct, 'still');
         if(pct >= 1){
-          if(!captureReferenceAnchor || guideGood){
+          // Lock the first stable, correctly framed pose as the template
+          // BEFORE the first photo is taken, so the reference itself is ideal.
+          if(!captureReferenceAnchor){
+            if(guideAnchor && guideGood) savePoseTemplate(guideAnchor);
+            else {
+              stillSince = now;
+              setRing(0, 'moving');
+              lastFrame = frame;
+              return;
+            }
+          }
+          if(guideGood || !guideAnchor){
             startCaptureSequence();
           } else {
             stillSince = now;
@@ -1146,15 +1269,15 @@
       srcW = video.videoWidth || q.w; srcH = video.videoHeight || q.h;
     }
 
-    // The first successful capture becomes the framing reference. Later
-    // automatic captures are allowed only while the live subject stays
-    // close to this position/size.
+    // The pose template is established BEFORE the first capture, from the
+    // live camera anchor. Do not replace it with the captured still: that
+    // avoids a poor first frame becoming the reference.
     if(!captureReferenceAnchor){
       try{
         const a=await detectPersonAnchor(sourceImg);
-        captureReferenceAnchor=normalizedAnchor(a, srcW, srcH);
-        updateGuideVisual(captureReferenceAnchor);
-      }catch(e){ /* visual guide still works */ }
+        const n=normalizedAnchor(a, srcW, srcH);
+        if(n) savePoseTemplate(n);
+      }catch(e){ /* guide remains usable */ }
     }
 
     // Downscale to the selected quality preset's target size (skip for
@@ -1193,6 +1316,7 @@
     await saveIndex();
     renderStreak();
     renderStrip();
+    showCapturePreview(dataUrl);
     // NOTE: no longer auto-triggering a device download here.
     // Chrome silently blocks downloads that aren't tied to a direct user
     // click, which is exactly what happens on auto-capture (still-pose
@@ -1331,6 +1455,15 @@
       console.error('device save failed completely', e);
       alert(t('saveFailedAlert'));
     }
+  }
+
+  function showCapturePreview(dataUrl){
+    if(!capturePreview) return;
+    clearTimeout(previewTimer);
+    capturePreviewImg.src = dataUrl;
+    capturePreviewLabel.textContent = t('previewSaved');
+    capturePreview.classList.add('show');
+    previewTimer = setTimeout(()=>capturePreview.classList.remove('show'), 1400);
   }
 
   function manualCapture(){
@@ -2013,7 +2146,9 @@
     document.getElementById('optQualityHigh').textContent = t('qualityHigh');
     document.getElementById('optQualityUltra').textContent = t('qualityUltra');
     document.getElementById('lblShutterVol').textContent = t('shutterVolLabel');
+    document.getElementById('lblTemplate').textContent = t('templateLabel');
     document.getElementById('lblLanguage').textContent = t('languageLabel');
+    updateTemplateButton();
 
     document.getElementById('galleryTitleText').textContent = t('galleryTitle');
     selectModeBtn.textContent = selectMode ? t('selectBtnOff') : t('selectBtnOn');
@@ -2047,6 +2182,7 @@
     startCamera();
   };
   shutterBtn.onclick = manualCapture;
+  resetTemplateBtn.onclick = clearPoseTemplate;
   document.getElementById('permBtn').onclick = ()=>{
     document.getElementById('permErr').style.display='none';
     startCamera();
@@ -2063,6 +2199,7 @@
 
   // ---------- Init ----------
   (async function init(){
+    loadPoseTemplates();
     applyLanguage();
     await loadIndex();
     renderStreak();
