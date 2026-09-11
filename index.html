@@ -102,20 +102,20 @@
   }
   #poseGuide .headGuide{
     position:absolute; left:50%; top:17%; transform:translateX(-50%);
-    width:92px; height:116px; border:2px solid rgba(200,255,61,.78);
+    width:92px; height:116px; border:3px solid rgba(200,255,61,.98);
     border-radius:48% 48% 45% 45%; box-shadow:0 0 18px rgba(0,0,0,.22);
   }
   #poseGuide .bodyGuide{
     position:absolute; left:50%; top:30%; transform:translateX(-50%);
-    width:min(58vw,360px); height:62%; border:2px dashed rgba(255,255,255,.52);
+    width:min(58vw,360px); height:62%; border:3px dashed rgba(255,255,255,.82);
     border-radius:45% 45% 12% 12%;
   }
   #poseGuide .guideLine{
     position:absolute; left:50%; width:min(72vw,460px); height:1px;
-    transform:translateX(-50%); background:rgba(200,255,61,.55);
+    transform:translateX(-50%); background:rgba(200,255,61,.88);
   }
   #poseGuide .shoulderLine{top:38%;}
-  #poseGuide .centerLine{top:50%; width:1px; height:54%; left:50%; background:rgba(255,255,255,.18);}
+  #poseGuide .centerLine{top:50%; width:1px; height:54%; left:50%; background:rgba(255,255,255,.32);}
   #poseGuide .guideLabel{
     position:absolute; left:50%; top:8%; transform:translateX(-50%);
     padding:7px 12px; border-radius:999px; background:rgba(10,11,13,.68);
@@ -356,7 +356,7 @@
       <img id="capturePreviewImg" alt="">
       <div class="previewLabel" id="capturePreviewLabel"></div>
     </div>
-    <div id="countdownOverlay"><div id="countdownNum">3</div></div>
+    <div id="captureDebug" aria-live="polite">자동촬영 준비 중</div>\n    <div id="countdownOverlay"><div id="countdownNum">3</div></div>
 
     <div id="topbar">
       <div class="pill"><div class="dot" id="streakDot"></div><span id="streakText"></span></div>
@@ -719,6 +719,11 @@
     }, 1000);
   }
 
+  const captureDebug = document.getElementById('captureDebug');
+  function setCaptureDebug(msg){
+    if(captureDebug) captureDebug.textContent = msg || '';
+  }
+
   const RING_CIRC = 628;
   work.width = 64; work.height = 48;
 
@@ -1035,8 +1040,9 @@
         }
       }
       const avgDiff = count ? sumDiff/count : 255;
-      // Existing sensitivity scale, but with a slightly more forgiving floor.
-      const threshold = 10.5 - sensitivity * .85;
+      // Phone preview noise and auto-exposure can create small pixel changes.
+      // Keep this threshold forgiving so stillness can actually be detected.
+      const threshold = Math.max(6.5, 12.5 - sensitivity * .55);
 
       if(now < cooldownUntil){
         setRing(0, 'cool');
@@ -1048,31 +1054,15 @@
         if(pct >= 1){
           // Lock the first stable, correctly framed pose as the template
           // BEFORE the first photo is taken, so the reference itself is ideal.
-          if(!captureReferenceAnchor){
-            // First shot: create the template from a reasonably framed,
-            // stable person. Do not require pixel-perfect placement.
-            if(guideAnchor && guideGood) {
-              savePoseTemplate(guideAnchor);
-            } else if(guideAnchor) {
-              // If the person is detected but just outside the ideal guide,
-              // accept the stable pose and use it as the template anyway.
-              savePoseTemplate(guideAnchor);
-            } else {
-              stillSince = now;
-              setRing(0, 'moving');
-              lastFrame = frame;
-              return;
-            }
+          if(!captureReferenceAnchor && guideAnchor){
+            // Template is optional. If face/person detection fails on a phone,
+            // motion detection alone must still be able to trigger a photo.
+            savePoseTemplate(guideAnchor);
           }
-          // A template should help the user frame consistently, but it must
-          // never make the app refuse to take a photo. Once the person is
-          // detected and has stayed still long enough, capture regardless of
-          // small template mismatch.
-          if(guideAnchor || !captureReferenceAnchor){
-            startCaptureSequence();
-          } else {
-            startCaptureSequence();
-          }
+
+          // The template is only a framing guide. It must NEVER block capture.
+          setCaptureDebug('정지 확인 완료 · 3초 카운트다운 시작');
+          startCaptureSequence();
         }
       } else {
         stillSince = null;
@@ -1091,16 +1081,22 @@
       ringFg.style.stroke = pct>0.7 ? 'var(--accent)' : 'var(--accent-dim)';
       stateText.textContent = pct>=1 ? t('stateCaptured') : t('stateStillHold');
       subText.textContent = pct>=1 ? '' : t('subStillHold');
+      if(pct < 1){
+        const heldSec = stillSince ? Math.max(0, (performance.now()-stillSince)/1000) : 0;
+        setCaptureDebug(`정지 상태 확인 중 · ${heldSec.toFixed(1)}초 / ${(holdMs/1000).toFixed(1)}초`);
+      }
       shutterBtn.classList.toggle('armed', pct>0.15);
     } else if(mode==='cool'){
       ringFg.style.stroke = 'var(--muted)';
       stateText.textContent = t('stateCool');
       subText.textContent = t('subCool');
+      setCaptureDebug('촬영 후 잠시 대기 중');
       shutterBtn.classList.remove('armed');
     } else {
       ringFg.style.stroke = 'var(--accent)';
       stateText.textContent = t('stateIdle');
       subText.textContent = t('subIdle');
+      setCaptureDebug(guideAnchor ? '움직임 감지 · 가만히 서보세요' : '인물 감지 대기 · 가만히 서보세요');
       shutterBtn.classList.remove('armed');
     }
   }
@@ -1117,6 +1113,7 @@
     const numEl = document.getElementById('countdownNum');
     stateText.textContent = t('statePrep');
     subText.textContent = t('subPrep');
+    setCaptureDebug('자동촬영 조건 충족 · 카운트다운 진행 중');
     overlay.style.display = 'flex';
 
     let n = 3;
