@@ -353,6 +353,37 @@
 }
 </style>
 
+
+<script id="korean-default-final">
+(function () {
+  // The app must start in Korean, regardless of browser/profile language.
+  var K = 'ko';
+  try {
+    ['lang','language','locale','just_pose_lang','justPoseLang'].forEach(function(k){
+      localStorage.setItem(k, K);
+    });
+  } catch (e) {}
+
+  // Intercept common language reads before/around the app initialization.
+  window.JUST_POSE_DEFAULT_LANG = K;
+
+  function setKoreanSelector() {
+    document.querySelectorAll('select').forEach(function(s) {
+      var o = Array.prototype.find.call(s.options, function(x) {
+        return /^ko(?:-|$)/i.test(x.value) || /한국어|Korean/i.test(x.textContent || '');
+      });
+      if (o) s.value = o.value;
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', setKoreanSelector, {once:true});
+  } else {
+    setKoreanSelector();
+  }
+})();
+</script>
+
 </head>
 <body>
 <div id="app">
@@ -2257,42 +2288,7 @@
 </script>
 
 
-<script id="force-korean-default">
-(function(){
-  function forceKorean(){
-    try {
-      // Common localStorage keys used by the app.
-      ['lang','language','locale','just_pose_lang','justPoseLang'].forEach(function(k){
-        try { localStorage.setItem(k, 'ko'); } catch(e){}
-      });
 
-      // Select Korean if the app has a language selector.
-      document.querySelectorAll('select').forEach(function(s){
-        var opt = Array.from(s.options).find(function(o){
-          return /^ko(?:-|$)/i.test(o.value) || /한국어|Korean/i.test(o.textContent || '');
-        });
-        if(opt && s.value !== opt.value){
-          s.value = opt.value;
-          s.dispatchEvent(new Event('change', {bubbles:true}));
-        }
-      });
-
-      // If the app has an explicit language variable, set it when globally accessible.
-      if (typeof window.lang !== 'undefined') window.lang = 'ko';
-      if (typeof window.language !== 'undefined') window.language = 'ko';
-      if (typeof window.currentLang !== 'undefined') window.currentLang = 'ko';
-    } catch(e){}
-  }
-  if(document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', forceKorean);
-  } else {
-    forceKorean();
-  }
-  // Run again shortly after app initialization, without changing any other behavior.
-  setTimeout(forceKorean, 100);
-  setTimeout(forceKorean, 500);
-})();
-</script>
 
 </body>
 </html>
