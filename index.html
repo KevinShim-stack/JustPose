@@ -335,6 +335,24 @@
   }
   .templateBtn:disabled{ opacity:.45; }
 </style>
+
+<style id="strong-guide-and-korean-default">
+/* 촬영 틀: 멀리서도 보이도록 굵고 진하게 */
+#guideOverlay, #guideCanvas, .guide-overlay {
+  opacity: 1 !important;
+}
+#guideOverlay svg, #guideOverlay canvas {
+  filter: drop-shadow(0 0 3px rgba(0,0,0,.95))
+          drop-shadow(0 0 6px rgba(0,0,0,.75));
+}
+.guide-frame, .pose-guide, .guide-box, .body-guide, .head-guide {
+  border-width: 4px !important;
+  border-style: solid !important;
+  box-shadow: 0 0 0 2px rgba(255,255,255,.9),
+              0 0 7px 3px rgba(0,0,0,.85) !important;
+}
+</style>
+
 </head>
 <body>
 <div id="app">
@@ -2221,5 +2239,22 @@
 
 })();
 </script>
+
+<script id="korean-default-language">
+(() => {
+  try {
+    const keys = ['lang','language','locale'];
+    for (const k of keys) {
+      if (localStorage.getItem(k) !== null) localStorage.setItem(k, 'ko');
+    }
+    const selects = [...document.querySelectorAll('select')];
+    for (const s of selects) {
+      const ko = [...s.options].find(o => /^ko(?:-|$)/i.test(o.value) || /한국어|Korean/i.test(o.text));
+      if (ko) { s.value = ko.value; s.dispatchEvent(new Event('change', {bubbles:true})); }
+    }
+  } catch(e) {}
+})();
+</script>
+
 </body>
 </html>
