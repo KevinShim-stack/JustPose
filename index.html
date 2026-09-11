@@ -368,15 +368,18 @@ try {
 </script>
 
 
-<style id="black-dashed-guide">
-/* 촬영 프레임: 검은색 점선 + 두꺼운 선 */
+
+
+
+<style id="green-thick-guide">
+/* 촬영 프레임: 진한 녹색, 매우 굵은 점선 */
 #guideOverlay, #guideCanvas, .guide-overlay {
   opacity: 1 !important;
 }
 .guide-frame, .pose-guide, .guide-box, .body-guide, .head-guide {
-  border: 5px dashed #000 !important;
-  box-shadow: 0 0 0 1px rgba(255,255,255,.9),
-              0 0 5px rgba(255,255,255,.65) !important;
+  border: 8px dashed #00C853 !important;
+  box-shadow: 0 0 0 2px rgba(0,0,0,.9),
+              0 0 6px rgba(0,200,83,.85) !important;
 }
 </style>
 
@@ -2274,3 +2277,11 @@ try {
 
 </body>
 </html>
+
+<style id="face-guide-emphasis">
+/* 얼굴 원형 가이드: 기존 위치에서 약간 아래, 더 크게 */
+.head-circle, .face-circle, .face-guide, .head-guide-circle {
+  transform: translateY(3%) scale(1.25) !important;
+  transform-origin: center center !important;
+}
+</style>
