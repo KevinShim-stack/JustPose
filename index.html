@@ -952,9 +952,11 @@
       const dy=Math.abs(anchor.cy-captureReferenceAnchor.cy);
       const ds=Math.abs(Math.log(Math.max(.001,anchor.bodyH)/Math.max(.001,captureReferenceAnchor.bodyH)));
       const dw=Math.abs(Math.log(Math.max(.001,anchor.bodyW)/Math.max(.001,captureReferenceAnchor.bodyW)));
-      // Body height is the primary scale reference; width is secondary because
-      // arm position can change substantially between poses.
-      good = dx < .055 && dy < .055 && ds < .10 && dw < .18;
+      // The template is intentionally forgiving. It is a visual/alignment
+      // reference, not a strict requirement for taking a photo.
+      // Allow normal stance changes, arm position changes, and small camera
+      // distance/position differences without preventing auto-capture.
+      good = dx < .12 && dy < .12 && ds < .22 && dw < .32;
     } else {
       // Before the first shot, keep the whole body centered in the guide.
       good = anchor.cx > .30 && anchor.cx < .70 && anchor.cy > .18 && anchor.cy < .62 && anchor.bodyH > .30 && anchor.bodyH < .88;
@@ -999,7 +1001,10 @@
       // to reset the stillness timer.
       const now = performance.now();
       let x0=0, y0=0, x1=work.width, y1=work.height;
-      const ref = captureReferenceAnchor || guideAnchor;
+      // Follow the person's current position for motion detection. The
+      // template remains a framing reference, but must not make the motion ROI
+      // miss the person after a small reposition.
+      const ref = guideAnchor || captureReferenceAnchor;
       if(ref){
         const rw = Math.max(ref.bodyW, .22);
         const rh = Math.max(ref.bodyH, .32);
@@ -1044,19 +1049,29 @@
           // Lock the first stable, correctly framed pose as the template
           // BEFORE the first photo is taken, so the reference itself is ideal.
           if(!captureReferenceAnchor){
-            if(guideAnchor && guideGood) savePoseTemplate(guideAnchor);
-            else {
+            // First shot: create the template from a reasonably framed,
+            // stable person. Do not require pixel-perfect placement.
+            if(guideAnchor && guideGood) {
+              savePoseTemplate(guideAnchor);
+            } else if(guideAnchor) {
+              // If the person is detected but just outside the ideal guide,
+              // accept the stable pose and use it as the template anyway.
+              savePoseTemplate(guideAnchor);
+            } else {
               stillSince = now;
               setRing(0, 'moving');
               lastFrame = frame;
               return;
             }
           }
-          if(guideGood || !guideAnchor){
+          // A template should help the user frame consistently, but it must
+          // never make the app refuse to take a photo. Once the person is
+          // detected and has stayed still long enough, capture regardless of
+          // small template mismatch.
+          if(guideAnchor || !captureReferenceAnchor){
             startCaptureSequence();
           } else {
-            stillSince = now;
-            setRing(0, 'moving');
+            startCaptureSequence();
           }
         }
       } else {
